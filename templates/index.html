@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Send to laptop</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
+</head>
+<body>
+<main>
+  <h1>Send to laptop</h1>
+  <p class="sub">Large files go in small chunks and resume if the connection drops.</p>
+
+  <div class="picks" id="picks">
+    <label class="drop" for="files"><b>Choose files</b><span>Photos, videos, documents, .zip</span></label>
+    <label class="drop" for="folder"><b>Choose folder</b><span>Desktop and iPad browsers</span></label>
+  </div>
+  <input class="sr" type="file" id="files" multiple>
+  <input class="sr" type="file" id="folder" webkitdirectory multiple>
+  <p class="hint">Sending a whole folder from iPhone: open it in the picker, tap <b>Select</b>, choose the files inside, then tick <b>Save these files in a new folder</b> below and name it.</p>
+
+  <div class="notice" id="notice" hidden>
+    That looks like a folder, and iPhone cannot send folders directly. Open the folder, select the files inside it, and tick <b>Save these files in a new folder</b>.
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="go" disabled>Upload</button>
+    <button class="ghost" id="cancel" hidden>Pause</button>
+    <button class="ghost" id="clear" hidden>Clear</button>
+  </div>
+
+  <div class="card" id="folderOpt">
+    <label class="fo"><input type="checkbox" id="useFolder"> Save these files in a new folder</label>
+    <input type="text" id="folderName" placeholder="Folder name" maxlength="80" autocomplete="off" hidden>
+  </div>
+
+  <div class="card" id="overall" hidden>
+    <div class="head"><span id="ovTitle">Uploading</span><span id="ovPct">0%</span></div>
+    <div class="bar" id="ovBar"><i></i></div>
+    <div class="stats"><span id="ovBytes"></span><span id="ovSpeed"></span></div>
+  </div>
+
+  <div class="card" id="listCard" hidden>
+    <p class="listhead" id="listHead"></p>
+    <div id="list"></div>
+  </div>
+
+  <details class="card">
+    <summary>Settings</summary>
+    <div class="opts">
+      <label for="conc">Parallel chunks</label>
+      <select id="conc"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>6</option></select>
+      <label for="csize">Chunk size</label>
+      <select id="csize"><option value="2">2 MB</option><option value="5" selected>5 MB</option><option value="10">10 MB</option><option value="20">20 MB</option><option value="32">32 MB</option></select>
+      <label class="chk"><input type="checkbox" id="extract" checked> Extract .zip files on the laptop</label>
+      <label class="chk"><input type="checkbox" id="delzip" checked> Delete the .zip after extracting</label>
+      <label class="chk"><input type="checkbox" id="force"> Re-send files that were already uploaded</label>
+    </div>
+  </details>
+</main>
+
+<script defer src="{{ url_for('static', filename='js/sbm.js') }}"></script>
