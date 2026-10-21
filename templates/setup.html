@@ -1,0 +1,9 @@
+{% extends "auth_base.html" %}{% set title = "Create the first admin" %}
+{% block body %}<p class="hint">Enter the one-time setup token printed in the SBM laptop window.</p>
+<form class="card auth-form" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Setup token<input name="token" required autocomplete="off"></label>
+  <label>Admin username<input name="username" required minlength="3" maxlength="80" autocomplete="username"></label>
+  <label>Password<input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
+  <button class="primary" type="submit">Create admin account</button>
+</form>{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "auth_base.html" %}{% set title = "Sign in to SBM" %}
+{% block body %}<form class="card auth-form" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="next" value="{{ next_url }}">
+  <label>Username<input name="username" required autocomplete="username"></label>
+  <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+  <button class="primary" type="submit">Sign in</button>
+</form>{% endblock %}

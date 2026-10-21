@@ -7,7 +7,7 @@ The browser uploads files in chunks over HTTP. The server stores chunks temporar
 ## Requirements
 
 - Python 3.9 or newer
-- Flask
+- Install the packages in `requirements.txt`
 - A browser on the sending device
 - The phone and laptop must be able to reach each other over the same local network, or through a working tethered network connection
 
@@ -18,11 +18,27 @@ Open PowerShell in this project folder:
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install Flask
+python -m pip install -r requirements.txt
 python sbm.py
 ```
 
-The app prints a URL such as `http://192.168.1.25:8000`. Open that URL in the sending device's browser. Keep the Python process running while transferring.
+On the first start, the laptop console prints a one-time admin setup token. Open the printed URL on the laptop, go to `/setup`, and use that token to create the first admin with a password of at least 12 characters. Admins create and disable later accounts under **Accounts**. Keep the Python process running while transferring.
+
+The default database is SQLite at `instance/sbm.sqlite3`; the signing key and cached thumbnails are also stored under `instance/`. Back up the database if you need to preserve accounts and audit history. To use PostgreSQL, install the included psycopg driver and set `SBM_DATABASE_URL` before starting, for example:
+
+```powershell
+$env:SBM_DATABASE_URL = 'postgresql+psycopg://sbm_user:password@localhost:5432/sbm'
+python sbm.py
+```
+
+You can set a stable `SBM_SECRET_KEY` in the environment. If omitted, SBM creates a persistent local key in `instance/secret.key`; keep that file when restoring the database so existing sessions remain valid.
+
+`python sbm.py` applies the checked-in Flask-Migrate revisions before serving. When changing the models, create and apply a revision with:
+
+```powershell
+python -m flask --app sbm db migrate -m "Describe schema change"
+python -m flask --app sbm db upgrade
+```
 
 To save somewhere other than the default `D:\Documents\transfer`, set `SBM_SAVE_DIR` before starting the app:
 
@@ -55,12 +71,15 @@ The page displays upload rate and an end-to-end average. The server reports asse
 
 ## Send files from the laptop to the phone
 
-1. Open SBM on the phone and tap **Send to phone**.
-2. Browse the laptop's transfer folder. Open a folder to browse inside it, or check a folder to include it in a download.
-3. Download one selected file in its original format, or select multiple files/folders to receive one ZIP. ZIP contents are stored without recompression and retain their paths relative to the folder currently being browsed.
-4. On iPhone, use Safari's download controls to save the file or ZIP to Files. To add photos or videos to Photos, save them from Files.
+1. Open SBM on the phone and tap **Send to phone**, then sign in with an account created by the admin.
+2. Choose an accessible fixed drive such as `C:` or `D:` and browse folders. Removable and mapped/network drives are excluded. SBM skips folders and files the process cannot access.
+3. JPEG, PNG, WebP, and HEIC/HEIF photos show cached thumbnails; tap **Preview** to open a full image. Videos open in the browser's native player when the format and codec are supported. SBM does not create video thumbnails, install FFmpeg, or transcode media.
+4. Use **Save to phone** for one original file. Select multiple files or a folder to receive one ZIP; ZIP contents are stored without recompression and retain paths relative to the current folder.
+5. Safari downloads appear in Files. To add photos or videos to Photos, save them from Files.
 
-The download browser can access files under `SBM_SAVE_DIR` except SBM's internal `.chunks` directory. Individual file downloads support HTTP range requests where the browser supports resuming. Temporary multi-file ZIPs are removed when the response stream closes and any leftover SBM-generated archives are cleaned at startup.
+Direct file downloads use HTTP range responses where supported. SBM creates a short-lived user-bound ticket and records one download request when the user starts the download; range/resume requests do not create duplicate audit rows. Preview and ZIP requests are audited, with one row per file included in a ZIP. The admin **Audit** page can filter and page through history. Audit events are bulk-written every 20 records or five minutes and flushed before the audit page loads and on clean shutdown; an abrupt process crash can lose events still waiting in memory. A download request does not prove that the phone saved the full file.
+
+Multi-file ZIPs are staged in SBM's outgoing temporary folder and removed when the response stream closes; leftover SBM-generated archives are cleaned at startup.
 
 ## Where files and transfer state are stored
 
@@ -69,8 +88,9 @@ By default, completed files go to `D:\Documents\transfer`. The app creates a `.c
 ## Network and safety notes
 
 - SBM listens on all network interfaces at port `8000`. Windows Firewall may ask whether Python can accept connections; allow it only on the private network you intend to use.
-- The app has no login, encryption, or access control. Anyone who can reach its port may be able to upload files into the destination folder. Use it only on a trusted private network, and stop the server when finished. Do not expose port 8000 to the public internet.
-- The **Send to phone** browser can list and download files from the configured transfer folder, so devices that can reach SBM can read those files as well as upload new ones.
+- The upload flow remains available without login for compatibility. The drive browser, previews, downloads, accounts, and audit history require an account. Run SBM only on a trusted private network and do not expose port 8000 to the public internet.
+- Drive browsing is limited to files accessible to the SBM process. It does not elevate permissions. Path traversal, symlinks/junctions, and SBM's internal state are excluded.
+- Login sessions and passwords travel over the existing HTTP connection. Use this only on a trusted local connection; SBM does not add HTTPS.
 - Transfers use HTTP. The server sanitizes uploaded path components and extracts ZIP entries within the destination tree. ZIP extraction is limited to 100,000 files and 50 GB of uncompressed content.
 - Media files such as JPEG photos and common video formats are already compressed, so this app does not gzip uploaded files.
 
@@ -85,8 +105,12 @@ python -m unittest discover -s tests -v
 ```text
 file_transfer/
 |-- sbm.py                 # Flask routes and upload/assembly logic
+|-- database.py            # SQLAlchemy accounts and batched audit writer
+|-- requirements.txt       # Runtime dependencies
+|-- migrations/            # Flask-Migrate schema history
 |-- templates/
-|   `-- index.html         # Upload page
+|   |-- index.html         # Transfer and drive browser UI
+|   `-- ...               # Login and admin pages
 `-- static/
     |-- css/sbm.css        # Page styles
     `-- js/sbm.js          # File picker, chunking, retries, and progress

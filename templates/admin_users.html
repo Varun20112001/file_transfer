@@ -1,0 +1,14 @@
+{% extends "auth_base.html" %}{% set title = "Account administration" %}
+{% block body %}
+<nav class="admin-nav"><a href="{{ url_for('index') }}">Transfers</a><a href="{{ url_for('admin_audit') }}">Audit history</a></nav>
+<form class="card auth-form" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h2>Create account</h2>
+  <label>Username<input name="username" required minlength="3" maxlength="80" autocomplete="off"></label>
+  <label>Temporary password<input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
+  <button class="primary" type="submit">Create user</button>
+</form>
+<section class="card"><h2>Accounts</h2>
+{% for user in users %}<div class="admin-row"><span><b>{{ user.username }}</b> · {{ user.role }} · {{ 'Active' if user.is_active else 'Disabled' }}</span>
+{% if user.is_active and user.id != current_user.id %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="disable"><input type="hidden" name="user_id" value="{{ user.id }}"><button class="ghost small" type="submit">Disable</button></form>{% endif %}</div>{% endfor %}
+</section>{% endblock %}

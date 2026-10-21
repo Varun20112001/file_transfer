@@ -412,7 +412,16 @@ refreshUI();
 /* ---------- laptop-to-phone browser ---------- */
 let browsePath = "";
 let browseLoaded = false;
+let selectedDrive = "";
 const selectedDownloadItems = new Map();
+
+function csrfHeaders() {
+  return { "Content-Type": "application/json", "X-CSRFToken": document.querySelector('meta[name="csrf-token"]')?.content || "" };
+}
+
+function loginRedirect() {
+  window.location.assign("/login?next=" + encodeURIComponent("/?mode=phone"));
+}
 
 function updateDownloadSelection() {
   const count = selectedDownloadItems.size;
@@ -420,22 +429,19 @@ function updateDownloadSelection() {
     ? count + " item" + (count === 1 ? "" : "s") + " selected"
     : "Nothing selected";
   $("downloadSelected").disabled = count === 0;
-  $("downloadSelected").textContent = count ? "Download " + count + " item" + (count === 1 ? "" : "s") : "Download";
-}
-
-function fileUrl(path) {
-  return "/api/download/file?" + new URLSearchParams({ path });
+  $("downloadSelected").textContent = count ? "Save " + count + " item" + (count === 1 ? "" : "s") + " to phone" : "Save to phone";
 }
 
 async function loadBrowse(path = browsePath) {
   $("browseStatus").textContent = "Loading files…";
   $("browseItems").replaceChildren();
   try {
-    const response = await fetch("/api/browse?" + new URLSearchParams({ path }));
+    const response = await fetch("/api/browse?" + new URLSearchParams({ drive: selectedDrive, path }));
+    if (response.status === 401) return loginRedirect();
     if (!response.ok) throw new Error("Could not read this folder (" + response.status + ")");
     const data = await response.json();
     browsePath = data.path || "";
-    $("browsePath").textContent = browsePath ? "/" + browsePath : "/";
+    $("browsePath").textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
     $("browseUp").disabled = !browsePath;
     selectedDownloadItems.clear();
 
@@ -469,6 +475,17 @@ async function loadBrowse(path = browsePath) {
       label.append(checkbox, name, meta);
       row.append(label);
 
+      if (item.type === "image") {
+        const thumb = document.createElement("img");
+        thumb.className = "browse-thumb"; thumb.loading = "lazy"; thumb.alt = ""; thumb.src = item.thumbnail;
+        thumb.addEventListener("click", () => openPreview(item)); row.prepend(thumb);
+      }
+      if (item.type === "image" || item.type === "video") {
+        const preview = document.createElement("button");
+        preview.type = "button"; preview.className = "ghost small open-folder"; preview.textContent = "Preview";
+        preview.addEventListener("click", () => openPreview(item)); row.append(preview);
+      }
+
       if (item.type === "directory") {
         const open = document.createElement("button");
         open.type = "button";
@@ -495,11 +512,54 @@ function showTransferMode(mode) {
   $("downloadTab").classList.toggle("active", !uploading);
   $("uploadTab").setAttribute("aria-selected", String(uploading));
   $("downloadTab").setAttribute("aria-selected", String(!uploading));
-  if (!uploading && !browseLoaded) loadBrowse("");
+  if (!uploading && !browseLoaded) loadDrives();
 }
+
+async function loadDrives() {
+  $("browseStatus").textContent = "Finding fixed drives…";
+  try {
+    const response = await fetch("/api/drives");
+    if (response.status === 401) return loginRedirect();
+    if (!response.ok) throw new Error("Could not list drives (" + response.status + ")");
+    const data = await response.json();
+    const picker = $("drivePicker"); picker.replaceChildren();
+    for (const drive of data.drives) {
+      const option = document.createElement("option"); option.value = drive.id; option.textContent = drive.label; picker.append(option);
+    }
+    if (!data.drives.length) throw new Error("No accessible fixed drives were found.");
+    selectedDrive = data.drives[0].id; picker.value = selectedDrive; await loadBrowse("");
+  } catch (error) { $("browseStatus").textContent = error.message || "Could not find drives."; }
+}
+
+async function openPreview(item) {
+  try {
+    const response = await fetch("/api/audit/preview", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive: selectedDrive, path: item.path }) });
+    if (response.status === 401) return loginRedirect();
+    if (!response.ok) throw new Error("Preview could not be opened (" + response.status + ")");
+    const result = await response.json();
+    const content = $("previewContent"); content.replaceChildren();
+    const media = document.createElement(item.type === "video" ? "video" : "img"); media.src = result.url;
+    if (item.type === "video") { media.controls = true; media.playsInline = true; } else media.alt = item.name;
+    content.append(media); $("previewName").textContent = item.name;
+    $("savePreview").onclick = () => saveOne(item); $("previewModal").hidden = false;
+  } catch (error) { $("browseStatus").textContent = error.message || "Could not open preview."; }
+}
+
+async function saveOne(item) {
+  try {
+    const response = await fetch("/api/download/ticket", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive: selectedDrive, path: item.path }) });
+    if (response.status === 401) return loginRedirect();
+    if (!response.ok) throw new Error("Download could not be prepared (" + response.status + ")");
+    const ticket = await response.json(); window.location.assign(ticket.url);
+  } catch (error) { $("browseStatus").textContent = error.message || "Could not start the download."; }
+}
+
+$("closePreview").addEventListener("click", () => { $("previewContent").replaceChildren(); $("previewModal").hidden = true; });
+$("previewModal").addEventListener("click", event => { if (event.target === $("previewModal")) $("closePreview").click(); });
 
 $("uploadTab").addEventListener("click", () => showTransferMode("upload"));
 $("downloadTab").addEventListener("click", () => showTransferMode("download"));
+$("drivePicker").addEventListener("change", () => { selectedDrive = $("drivePicker").value; browseLoaded = false; selectedDownloadItems.clear(); loadBrowse(""); });
 $("refreshFiles").addEventListener("click", () => loadBrowse(browsePath));
 $("browseHome").addEventListener("click", () => loadBrowse(""));
 $("browseUp").addEventListener("click", () => {
@@ -510,8 +570,8 @@ $("browseUp").addEventListener("click", () => {
 $("downloadSelected").addEventListener("click", async () => {
   const selected = [...selectedDownloadItems.values()];
   if (!selected.length) return;
-  if (selected.length === 1 && selected[0].type === "file") {
-    window.location.assign(fileUrl(selected[0].path));
+  if (selected.length === 1 && selected[0].type !== "directory") {
+    await saveOne(selected[0]);
     return;
   }
 
@@ -522,9 +582,10 @@ $("downloadSelected").addEventListener("click", async () => {
   try {
     const response = await fetch("/api/download/archive", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base: browsePath, paths: selected.map(item => item.path) }),
+      headers: csrfHeaders(),
+      body: JSON.stringify({ drive: selectedDrive, base: browsePath, paths: selected.map(item => item.path) }),
     });
+    if (response.status === 401) return loginRedirect();
     if (!response.ok) throw new Error("Could not prepare the ZIP (" + response.status + ")");
     const archive = await response.json();
     $("browseStatus").textContent = "Starting download…";
@@ -536,3 +597,5 @@ $("downloadSelected").addEventListener("click", async () => {
     updateDownloadSelection();
   }
 });
+
+if (new URLSearchParams(location.search).get("mode") === "phone") showTransferMode("download");
