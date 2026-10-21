@@ -134,3 +134,6 @@ dmypy.json
 # Project files
 tests/
 *.pickle
+
+# Keep the file-transfer API regression tests versioned.
+!tests/

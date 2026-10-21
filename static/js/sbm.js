@@ -408,3 +408,131 @@ document.addEventListener("drop", async e => {
   };
 })();
 refreshUI();
+
+/* ---------- laptop-to-phone browser ---------- */
+let browsePath = "";
+let browseLoaded = false;
+const selectedDownloadItems = new Map();
+
+function updateDownloadSelection() {
+  const count = selectedDownloadItems.size;
+  $("selectionSummary").textContent = count
+    ? count + " item" + (count === 1 ? "" : "s") + " selected"
+    : "Nothing selected";
+  $("downloadSelected").disabled = count === 0;
+  $("downloadSelected").textContent = count ? "Download " + count + " item" + (count === 1 ? "" : "s") : "Download";
+}
+
+function fileUrl(path) {
+  return "/api/download/file?" + new URLSearchParams({ path });
+}
+
+async function loadBrowse(path = browsePath) {
+  $("browseStatus").textContent = "Loading files…";
+  $("browseItems").replaceChildren();
+  try {
+    const response = await fetch("/api/browse?" + new URLSearchParams({ path }));
+    if (!response.ok) throw new Error("Could not read this folder (" + response.status + ")");
+    const data = await response.json();
+    browsePath = data.path || "";
+    $("browsePath").textContent = browsePath ? "/" + browsePath : "/";
+    $("browseUp").disabled = !browsePath;
+    selectedDownloadItems.clear();
+
+    if (!data.items.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty-folder";
+      empty.textContent = "This folder is empty.";
+      $("browseItems").append(empty);
+    }
+
+    for (const item of data.items) {
+      const row = document.createElement("div");
+      row.className = "browse-row";
+
+      const label = document.createElement("label");
+      label.className = "browse-entry";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", "Select " + item.name);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selectedDownloadItems.set(item.path, item);
+        else selectedDownloadItems.delete(item.path);
+        updateDownloadSelection();
+      });
+      const name = document.createElement("span");
+      name.className = "browse-name";
+      name.textContent = item.name;
+      const meta = document.createElement("span");
+      meta.className = "browse-meta";
+      meta.textContent = item.type === "directory" ? "Folder" : fmtSize(item.size);
+      label.append(checkbox, name, meta);
+      row.append(label);
+
+      if (item.type === "directory") {
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "ghost small open-folder";
+        open.textContent = "Open";
+        open.addEventListener("click", () => loadBrowse(item.path));
+        row.append(open);
+      }
+      $("browseItems").append(row);
+    }
+    $("browseStatus").textContent = "";
+    browseLoaded = true;
+    updateDownloadSelection();
+  } catch (error) {
+    $("browseStatus").textContent = error.message || "Could not load files.";
+  }
+}
+
+function showTransferMode(mode) {
+  const uploading = mode === "upload";
+  $("uploadMode").hidden = !uploading;
+  $("downloadMode").hidden = uploading;
+  $("uploadTab").classList.toggle("active", uploading);
+  $("downloadTab").classList.toggle("active", !uploading);
+  $("uploadTab").setAttribute("aria-selected", String(uploading));
+  $("downloadTab").setAttribute("aria-selected", String(!uploading));
+  if (!uploading && !browseLoaded) loadBrowse("");
+}
+
+$("uploadTab").addEventListener("click", () => showTransferMode("upload"));
+$("downloadTab").addEventListener("click", () => showTransferMode("download"));
+$("refreshFiles").addEventListener("click", () => loadBrowse(browsePath));
+$("browseHome").addEventListener("click", () => loadBrowse(""));
+$("browseUp").addEventListener("click", () => {
+  const parts = browsePath.split("/").filter(Boolean);
+  parts.pop();
+  loadBrowse(parts.join("/"));
+});
+$("downloadSelected").addEventListener("click", async () => {
+  const selected = [...selectedDownloadItems.values()];
+  if (!selected.length) return;
+  if (selected.length === 1 && selected[0].type === "file") {
+    window.location.assign(fileUrl(selected[0].path));
+    return;
+  }
+
+  const button = $("downloadSelected");
+  button.disabled = true;
+  button.textContent = "Preparing ZIP…";
+  $("browseStatus").textContent = "Preparing a ZIP for download…";
+  try {
+    const response = await fetch("/api/download/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base: browsePath, paths: selected.map(item => item.path) }),
+    });
+    if (!response.ok) throw new Error("Could not prepare the ZIP (" + response.status + ")");
+    const archive = await response.json();
+    $("browseStatus").textContent = "Starting download…";
+    window.location.assign(archive.url);
+  } catch (error) {
+    $("browseStatus").textContent = error.message || "Could not prepare the download.";
+  } finally {
+    button.disabled = false;
+    updateDownloadSelection();
+  }
+});

@@ -1,6 +1,6 @@
 # Send to Laptop (SBM)
 
-A small Flask app for sending files from a phone or computer browser to a folder on your laptop. It is designed for local-network transfers, including an iPhone connected to the laptop through USB Personal Hotspot.
+A small Flask app for transferring files both ways between a phone or computer browser and a folder on your laptop. It is designed for local-network transfers, including an iPhone connected to the laptop through USB Personal Hotspot.
 
 The browser uploads files in chunks over HTTP. The server stores chunks temporarily, assembles each completed file in the configured destination, and can optionally extract ZIP files. The uploader supports retries, pausing, and resuming unfinished uploads.
 
@@ -53,6 +53,15 @@ The USB Hotspot option carries SBM's HTTP network traffic over the USB network c
 
 The page displays upload rate and an end-to-end average. The server reports assembly time separately; ZIP extraction time is also shown when applicable.
 
+## Send files from the laptop to the phone
+
+1. Open SBM on the phone and tap **Send to phone**.
+2. Browse the laptop's transfer folder. Open a folder to browse inside it, or check a folder to include it in a download.
+3. Download one selected file in its original format, or select multiple files/folders to receive one ZIP. ZIP contents are stored without recompression and retain their paths relative to the folder currently being browsed.
+4. On iPhone, use Safari's download controls to save the file or ZIP to Files. To add photos or videos to Photos, save them from Files.
+
+The download browser can access files under `SBM_SAVE_DIR` except SBM's internal `.chunks` directory. Individual file downloads support HTTP range requests where the browser supports resuming. Temporary multi-file ZIPs are removed when the response stream closes and any leftover SBM-generated archives are cleaned at startup.
+
 ## Where files and transfer state are stored
 
 By default, completed files go to `D:\Documents\transfer`. The app creates a `.chunks` subdirectory there for partial uploads and `done.json` for completed-upload records. Incomplete uploads can resume while their chunk data remains in that directory. Successfully completed uploads have their temporary chunk directory removed.
@@ -61,8 +70,15 @@ By default, completed files go to `D:\Documents\transfer`. The app creates a `.c
 
 - SBM listens on all network interfaces at port `8000`. Windows Firewall may ask whether Python can accept connections; allow it only on the private network you intend to use.
 - The app has no login, encryption, or access control. Anyone who can reach its port may be able to upload files into the destination folder. Use it only on a trusted private network, and stop the server when finished. Do not expose port 8000 to the public internet.
+- The **Send to phone** browser can list and download files from the configured transfer folder, so devices that can reach SBM can read those files as well as upload new ones.
 - Transfers use HTTP. The server sanitizes uploaded path components and extracts ZIP entries within the destination tree. ZIP extraction is limited to 100,000 files and 50 GB of uncompressed content.
 - Media files such as JPEG photos and common video formats are already compressed, so this app does not gzip uploaded files.
+
+## Run the API regression tests
+
+```powershell
+python -m unittest discover -s tests -v
+```
 
 ## Project layout
 

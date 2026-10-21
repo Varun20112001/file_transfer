@@ -1,13 +1,34 @@
 # receive_chunked.py  (pip install flask)
 import os, re, json, shutil, socket, uuid, threading, zipfile, time
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, Response, abort, request, jsonify, render_template, send_file, stream_with_context, url_for
 from werkzeug.utils import secure_filename
 
 SAVE_DIR = os.getenv("SBM_SAVE_DIR", "D:\\Documents\\transfer")
 TMP_DIR = os.path.join(SAVE_DIR, ".chunks")
 DONE_FILE = os.path.join(TMP_DIR, "done.json")
+OUTGOING_DIR = os.path.join(TMP_DIR, "outgoing")
 MAX_ZIP_FILES = 100_000            # safety limits for zip extraction
 MAX_ZIP_BYTES = 50 * 1024 ** 3     # 50 GB uncompressed
+OUTGOING_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+os.makedirs(OUTGOING_DIR, exist_ok=True)
+
+
+def cleanup_outgoing_archives():
+    """Remove only archives owned by SBM's outbound-download feature."""
+    try:
+        entries = list(os.scandir(OUTGOING_DIR))
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.startswith("sbm-download-") and entry.name.endswith((".zip", ".tmp")):
+            try:
+                if entry.is_file(follow_symlinks=False):
+                    os.remove(entry.path)
+            except OSError:
+                pass
+
+
+cleanup_outgoing_archives()
 os.makedirs(TMP_DIR, exist_ok=True)
 
 
@@ -20,6 +41,113 @@ ID_RE = re.compile(r"^[0-9a-f]{6,32}$")
 complete_locks = tuple(threading.Lock() for _ in range(64))
 destination_lock = threading.Lock()  # protects unique-name selection and final replace
 done_lock = threading.Lock()       # protects done.json
+
+
+def resolve_save_path(relative_path=""):
+    """Resolve a browser-supplied path strictly inside SAVE_DIR."""
+    if not isinstance(relative_path, str):
+        abort(400, description="path must be a string")
+
+    relative_path = relative_path.replace("\\", "/")
+    if "\x00" in relative_path:
+        abort(400, description="invalid path")
+    if relative_path.startswith("/") or re.match(r"^[A-Za-z]:", relative_path):
+        abort(400, description="absolute paths are not allowed")
+    parts = relative_path.split("/") if relative_path else []
+    if any(part in ("", ".", "..") for part in parts):
+        abort(400, description="invalid path")
+    if any(":" in part for part in parts):
+        abort(400, description="invalid path")
+    if any(part.casefold() == ".chunks" for part in parts):
+        abort(404)
+
+    root = os.path.realpath(SAVE_DIR)
+    candidate = root
+    for part in parts:
+        candidate = os.path.join(candidate, part)
+        # Do not follow file or directory symlinks from a client request.
+        if os.path.islink(candidate):
+            abort(403, description="symbolic links are not available")
+
+    resolved = os.path.realpath(candidate)
+    try:
+        inside_root = os.path.normcase(os.path.commonpath([root, resolved])) == os.path.normcase(root)
+    except ValueError:
+        inside_root = False
+    if not inside_root:
+        abort(403, description="path is outside the transfer folder")
+
+    resolved_rel = os.path.relpath(resolved, root)
+    if resolved_rel != "." and any(part.casefold() == ".chunks" for part in resolved_rel.split(os.sep)):
+        abort(404)
+    if not os.path.exists(resolved):
+        abort(404)
+    return resolved
+
+
+def relative_save_path(path):
+    return os.path.relpath(path, os.path.realpath(SAVE_DIR)).replace(os.sep, "/")
+
+
+def collect_archive_entries(base_path, selected_paths):
+    """Return deduplicated (source, archive name, is_dir, size) ZIP entries."""
+    base_real = os.path.realpath(base_path)
+    found = {}
+
+    def add_file(source):
+        archive_name = os.path.relpath(source, base_real).replace(os.sep, "/")
+        if archive_name.startswith("../") or archive_name == "..":
+            abort(403, description="selection is outside the current folder")
+        found.setdefault(archive_name, (source, archive_name, False, os.path.getsize(source)))
+
+    def walk_directory(directory):
+        try:
+            with os.scandir(directory) as scan:
+                children = sorted(scan, key=lambda child: child.name.casefold())
+        except OSError:
+            abort(403, description="cannot read selected folder")
+        if not children:
+            archive_name = os.path.relpath(directory, base_real).replace(os.sep, "/")
+            if archive_name not in (".", ""):
+                found.setdefault(archive_name + "/", (directory, archive_name + "/", True, 0))
+        for child in children:
+            if child.name.casefold() == ".chunks" or child.is_symlink():
+                continue
+            child_path = os.path.join(directory, child.name)
+            resolve_save_path(relative_save_path(child_path))
+            try:
+                if child.is_dir(follow_symlinks=False):
+                    archive_name = os.path.relpath(child_path, base_real).replace(os.sep, "/")
+                    found.setdefault(archive_name + "/", (child_path, archive_name + "/", True, 0))
+                    walk_directory(child_path)
+                elif child.is_file(follow_symlinks=False):
+                    add_file(child_path)
+            except OSError:
+                continue
+
+    for selected in selected_paths:
+        selected_path = resolve_save_path(selected)
+        try:
+            is_within_base = os.path.normcase(os.path.commonpath([base_real, selected_path])) == os.path.normcase(base_real)
+        except ValueError:
+            is_within_base = False
+        if not is_within_base or selected_path == base_real:
+            abort(403, description="selection is outside the current folder")
+        if os.path.isdir(selected_path):
+            archive_name = os.path.relpath(selected_path, base_real).replace(os.sep, "/")
+            found.setdefault(archive_name + "/", (selected_path, archive_name + "/", True, 0))
+            walk_directory(selected_path)
+        elif os.path.isfile(selected_path):
+            add_file(selected_path)
+        else:
+            abort(400, description="selected item is not a file or folder")
+
+    entries = list(found.values())
+    if not entries:
+        abort(400, description="selection contains no downloadable files")
+    if len(entries) > MAX_ZIP_FILES or sum(entry[3] for entry in entries) > MAX_ZIP_BYTES:
+        abort(413, description="selection exceeds ZIP limits")
+    return entries
 
 
 
@@ -135,6 +263,112 @@ def received_chunks(upload_id, total):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/browse")
+def browse_files():
+    current = request.args.get("path", "")
+    directory = resolve_save_path(current)
+    if not os.path.isdir(directory):
+        abort(400, description="path is not a folder")
+
+    items = []
+    try:
+        with os.scandir(directory) as scan:
+            entries = sorted(scan, key=lambda entry: (not entry.is_dir(follow_symlinks=False), entry.name.casefold()))
+        for entry in entries:
+            if entry.name.casefold() == ".chunks" or entry.is_symlink():
+                continue
+            full_path = os.path.join(directory, entry.name)
+            resolve_save_path(relative_save_path(full_path))
+            if entry.is_dir(follow_symlinks=False):
+                items.append({"name": entry.name, "path": relative_save_path(full_path), "type": "directory"})
+            elif entry.is_file(follow_symlinks=False):
+                items.append({
+                    "name": entry.name,
+                    "path": relative_save_path(full_path),
+                    "type": "file",
+                    "size": entry.stat(follow_symlinks=False).st_size,
+                })
+    except OSError:
+        abort(403, description="cannot read folder")
+
+    current_rel = "" if os.path.realpath(directory) == os.path.realpath(SAVE_DIR) else relative_save_path(directory)
+    return jsonify(path=current_rel, items=items)
+
+
+@app.route("/api/download/file")
+def download_file():
+    path = resolve_save_path(request.args.get("path", ""))
+    if not os.path.isfile(path):
+        abort(400, description="path is not a file")
+    response = send_file(path, as_attachment=True, download_name=os.path.basename(path), conditional=True, max_age=0)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/download/archive", methods=["POST"])
+def create_download_archive():
+    body = request.get_json(silent=True) or {}
+    base = body.get("base", "")
+    selected = body.get("paths")
+    if not isinstance(selected, list) or not selected or len(selected) > MAX_ZIP_FILES:
+        abort(400, description="select one or more files or folders")
+    if any(not isinstance(path, str) for path in selected):
+        abort(400, description="selected paths must be strings")
+
+    base_path = resolve_save_path(base)
+    if not os.path.isdir(base_path):
+        abort(400, description="base path is not a folder")
+    entries = collect_archive_entries(base_path, selected)
+    token = uuid.uuid4().hex
+    archive_name = f"sbm-download-{token}.zip"
+    temp_path = os.path.join(OUTGOING_DIR, archive_name + ".tmp")
+    archive_path = os.path.join(OUTGOING_DIR, archive_name)
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+            for source, archive_name_in_zip, is_dir, _size in entries:
+                if is_dir:
+                    archive.writestr(archive_name_in_zip, "")
+                else:
+                    archive.write(source, archive_name_in_zip)
+        os.replace(temp_path, archive_path)
+    except Exception:
+        for path in (temp_path, archive_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        raise
+
+    return jsonify(url=url_for("download_archive", token=token), name=f"SBM-files-{token[:8]}.zip")
+
+
+@app.route("/api/download/archive/<token>")
+def download_archive(token):
+    if not OUTGOING_TOKEN_RE.fullmatch(token or ""):
+        abort(404)
+    path = os.path.join(OUTGOING_DIR, f"sbm-download-{token}.zip")
+    if not os.path.isfile(path):
+        abort(404)
+    file_response = send_file(path, mimetype="application/zip", as_attachment=True,
+                              download_name=f"SBM-files-{token[:8]}.zip", conditional=False, max_age=0)
+    headers = dict(file_response.headers)
+    headers["X-Content-Type-Options"] = "nosniff"
+    headers["Cache-Control"] = "no-store"
+
+    def stream_and_remove():
+        try:
+            yield from file_response.response
+        finally:
+            file_response.close()
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    return Response(stream_with_context(stream_and_remove()), headers=headers)
 
 
 @app.route("/init", methods=["POST"])
