@@ -37,6 +37,19 @@ class AuditEvent(db.Model):
     user = db.relationship(User, lazy="joined")
 
 
+class Favorite(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
+    drive = db.Column(db.String(3), nullable=False)
+    path = db.Column(db.Text, nullable=False)
+    item_type = db.Column(db.String(16), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "drive", "path", name="uq_favorite_user_drive_path"),
+    )
+
+
 class AuditBuffer:
     """Thread-safe in-memory audit queue, bulk committed at a record threshold or timer."""
 

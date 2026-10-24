@@ -40,6 +40,23 @@ python -m flask --app sbm db migrate -m "Describe schema change"
 python -m flask --app sbm db upgrade
 ```
 
+## Windows tray app and portable package
+
+The tray launcher keeps the SBM server running in the background. Right-click its notification-area icon for **Open admin**, **Show phone QR code**, or **Exit SBM**. The QR window lists the laptop's detected IPv4 addresses; select the address reachable from the phone, such as the USB Personal Hotspot adapter, then scan it with the phone camera. The first packaged launch shows the one-time administrator setup token and a button to open the setup page.
+
+To build the portable ZIP:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+.\packaging\build.ps1
+```
+
+The output is `dist\SBM-Portable.zip`. Extract it and start `SBM.exe`; the server appears in the Windows notification area. Keep the `data` folder created beside the executable when replacing the app files.
+
+Packaged builds store the database, signing key, cached thumbnails, and log in a writable user-data folder: beside `SBM.exe` in portable mode, or `%LOCALAPPDATA%\SBM` after installation. Your transferred files stay in `SBM_SAVE_DIR` (default `D:\Documents\transfer`). The tray app continues to listen on port 8000; allow SBM through Windows Firewall on the private network used by the phone. Exit from the tray menu to stop the server cleanly.
+
+The portable package includes Python and the required application files. No Python installation is needed on the target laptop. This is a Windows build and should be rebuilt after changing Python dependencies, templates, static assets, or migrations.
+
 To save somewhere other than the default `D:\Documents\transfer`, set `SBM_SAVE_DIR` before starting the app:
 
 ```powershell
@@ -72,14 +89,18 @@ The page displays upload rate and an end-to-end average. The server reports asse
 ## Send files from the laptop to the phone
 
 1. Open SBM on the phone and tap **Send to phone**, then sign in with an account created by the admin.
-2. Choose an accessible fixed drive such as `C:` or `D:` and browse folders. Removable and mapped/network drives are excluded. SBM skips folders and files the process cannot access.
-3. JPEG, PNG, WebP, and HEIC/HEIF photos show cached thumbnails; tap **Preview** to open a full image. Videos open in the browser's native player when the format and codec are supported. SBM does not create video thumbnails, install FFmpeg, or transcode media.
+2. Choose an accessible fixed drive such as `C:` or `D:` and browse folders. Removable and mapped/network drives are excluded. SBM skips folders and files the process cannot access. Tap a row to open a folder or preview a photo/video; tapping a non-media file starts its download.
+3. JPEG, PNG, WebP, and HEIC/HEIF photos show cached thumbnails. Tap **Favorites** to revisit starred files and folders across drives; unavailable entries can be removed from the list. Image previews use a cached rendition capped at 2048 pixels on the longest edge, while **Save to phone** always sends the original. Videos open in the browser's native player when the format and codec are supported. SBM does not create video thumbnails, install FFmpeg, or transcode media.
 4. Use **Save to phone** for one original file. Select multiple files or a folder to receive one ZIP; ZIP contents are stored without recompression and retain paths relative to the current folder.
 5. Safari downloads appear in Files. To add photos or videos to Photos, save them from Files.
 
-Direct file downloads use HTTP range responses where supported. SBM creates a short-lived user-bound ticket and records one download request when the user starts the download; range/resume requests do not create duplicate audit rows. Preview and ZIP requests are audited, with one row per file included in a ZIP. The admin **Audit** page can filter and page through history. Audit events are bulk-written every 20 records or five minutes and flushed before the audit page loads and on clean shutdown; an abrupt process crash can lose events still waiting in memory. A download request does not prove that the phone saved the full file.
+Admins can delete individual files with the **×** control at the right of a file row. SBM asks for confirmation, does not allow deleting folders from this browser, and records the signed-in admin, drive, path, and time in the audit history. Failed removals and interrupted audit outcomes are marked separately. Deletion is permanent.
+
+Direct file downloads use HTTP range responses where supported. SBM creates a short-lived user-bound ticket and records one download request when the user starts the download; range/resume requests do not create duplicate audit rows. Preview and ZIP requests are audited, with one row per file included in a ZIP. The admin **Audit** page can filter and page through history. Most audit events are bulk-written every 20 records or five minutes and flushed before the audit page loads and on clean shutdown; delete events are written immediately before a removal and their outcome is updated afterward. An abrupt process crash can leave a delete outcome marked pending or lose other events still waiting in memory. A download request does not prove that the phone saved the full file.
 
 Multi-file ZIPs are staged in SBM's outgoing temporary folder and removed when the response stream closes; leftover SBM-generated archives are cleaned at startup.
+
+Image thumbnails and preview renditions are cached under the SBM instance data folder. SBM removes cache files that have not been used for seven days at startup and every 24 hours; they are regenerated the next time a photo is viewed.
 
 ## Where files and transfer state are stored
 

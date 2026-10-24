@@ -6,3 +6,6 @@ Flask-WTF>=1.2,<2
 Pillow>=10,<13
 pillow-heif>=0.18,<1
 psycopg[binary]>=3.2,<4
+psutil>=6,<8
+pystray>=0.19,<1
+qrcode[pil]>=8,<9
