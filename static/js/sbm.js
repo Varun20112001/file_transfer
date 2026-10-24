@@ -3,6 +3,8 @@ const canDeleteFiles = document.querySelector("main")?.dataset.canDelete === "tr
 const jobs = [];
 let running = false, cancelled = false;
 const activeXhrs = new Set();
+let browseImageItems = [], favoriteImageItems = [];
+let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0;
 
 function fmtSize(b) {
   if (b < 1024) return b + " B";
@@ -443,6 +445,7 @@ async function loadBrowse(path = browsePath) {
     if (!response.ok) throw new Error("Could not read this folder (" + response.status + ")");
     const data = await response.json();
     browsePath = data.path || "";
+    browseImageItems = (data.items || []).filter(item => item.type === "image").map(item => ({ ...item, drive: selectedDrive }));
     $("browsePath").textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
     $("browseUp").disabled = !browsePath;
     selectedDownloadItems.clear();
@@ -518,6 +521,7 @@ async function loadBrowse(path = browsePath) {
 }
 
 function renderFavoriteItems(items) {
+  favoriteImageItems = items.filter(item => item.available && item.type === "image");
   const container = $("favoriteItems");
   container.replaceChildren();
   $("favoriteCount").textContent = items.length ? String(items.length) : "";
@@ -628,7 +632,7 @@ function activateFavorite(item) {
     browseLoaded = false;
     loadBrowse(item.path);
   } else if (item.type === "image" || item.type === "video") {
-    openPreview(item);
+    openPreview(item, item.type === "image" ? favoriteImageItems : []);
   } else {
     saveOne(item);
   }
@@ -691,7 +695,7 @@ async function setFavorite(item, button) {
 
 function openBrowseItem(item) {
   if (item.type === "directory") loadBrowse(item.path);
-  else if (item.type === "image" || item.type === "video") openPreview(item);
+  else if (item.type === "image" || item.type === "video") openPreview(item, item.type === "image" ? browseImageItems : []);
   else saveOne(item);
 }
 
@@ -722,19 +726,63 @@ async function loadDrives() {
   } catch (error) { $("browseStatus").textContent = error.message || "Could not find drives."; }
 }
 
-async function openPreview(item) {
+function previewKey(item) {
+  return (item.drive || selectedDrive) + "|" + item.path;
+}
+
+function updatePreviewNavigation() {
+  const hasPrevious = previewImageIndex > 0;
+  const hasNext = previewImageIndex >= 0 && previewImageIndex < previewImageItems.length - 1;
+  $("previousPhoto").hidden = previewImageItems.length < 2;
+  $("nextPhoto").hidden = previewImageItems.length < 2;
+  $("previousPhoto").disabled = !hasPrevious;
+  $("nextPhoto").disabled = !hasNext;
+}
+
+async function openPreview(item, imageItems = []) {
+  if (item.type === "image") {
+    previewImageItems = imageItems.length ? imageItems : [item];
+    previewImageIndex = previewImageItems.findIndex(candidate => previewKey(candidate) === previewKey(item));
+    if (previewImageIndex < 0) {
+      previewImageItems = [item];
+      previewImageIndex = 0;
+    }
+  } else {
+    previewImageItems = [];
+    previewImageIndex = -1;
+  }
+  updatePreviewNavigation();
+  await loadPreviewItem(item);
+}
+
+async function loadPreviewItem(item) {
+  const requestId = ++previewRequestId;
   try {
     const drive = item.drive || selectedDrive;
     const response = await fetch("/api/audit/preview", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive, path: item.path }) });
     if (response.status === 401) return loginRedirect();
     if (!response.ok) throw new Error("Preview could not be opened (" + response.status + ")");
     const result = await response.json();
+    if (requestId !== previewRequestId) return;
     const content = $("previewContent"); content.replaceChildren();
     const media = document.createElement(item.type === "video" ? "video" : "img"); media.src = result.url;
     if (item.type === "video") { media.controls = true; media.playsInline = true; } else media.alt = item.name;
-    content.append(media); $("previewName").textContent = item.name;
-    $("savePreview").onclick = () => saveOne(item); $("previewModal").hidden = false;
-  } catch (error) { $("browseStatus").textContent = error.message || "Could not open preview."; }
+    content.append(media);
+    $("previewName").textContent = item.type === "image" && previewImageItems.length > 1
+      ? `${item.name} · ${previewImageIndex + 1} of ${previewImageItems.length}` : item.name;
+    $("savePreview").onclick = () => saveOne(item);
+    $("previewModal").hidden = false;
+  } catch (error) {
+    if (requestId === previewRequestId) $("browseStatus").textContent = error.message || "Could not open preview.";
+  }
+}
+
+function movePreviewPhoto(direction) {
+  const nextIndex = previewImageIndex + direction;
+  if (nextIndex < 0 || nextIndex >= previewImageItems.length) return;
+  previewImageIndex = nextIndex;
+  updatePreviewNavigation();
+  loadPreviewItem(previewImageItems[previewImageIndex]);
 }
 
 async function saveOne(item) {
@@ -747,8 +795,32 @@ async function saveOne(item) {
   } catch (error) { $("browseStatus").textContent = error.message || "Could not start the download."; }
 }
 
-$("closePreview").addEventListener("click", () => { $("previewContent").replaceChildren(); $("previewModal").hidden = true; });
+$("previousPhoto").addEventListener("click", () => movePreviewPhoto(-1));
+$("nextPhoto").addEventListener("click", () => movePreviewPhoto(1));
+$("closePreview").addEventListener("click", () => {
+  previewRequestId++;
+  $("previewContent").replaceChildren();
+  $("previewModal").hidden = true;
+  previewImageItems = [];
+  previewImageIndex = -1;
+  updatePreviewNavigation();
+});
 $("previewModal").addEventListener("click", event => { if (event.target === $("previewModal")) $("closePreview").click(); });
+$("previewModal").addEventListener("keydown", event => {
+  if (event.key === "ArrowLeft" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(-1); }
+  if (event.key === "ArrowRight" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(1); }
+  if (event.key === "Escape") { event.preventDefault(); $("closePreview").click(); }
+});
+let previewTouchStart = null;
+$("previewContent").addEventListener("touchstart", event => {
+  if (previewImageItems.length > 1 && event.touches.length === 1) previewTouchStart = event.touches[0].clientX;
+}, { passive: true });
+$("previewContent").addEventListener("touchend", event => {
+  if (previewTouchStart === null || !event.changedTouches.length) return;
+  const delta = event.changedTouches[0].clientX - previewTouchStart;
+  previewTouchStart = null;
+  if (Math.abs(delta) >= 45) movePreviewPhoto(delta < 0 ? 1 : -1);
+}, { passive: true });
 
 $("uploadTab").addEventListener("click", () => showTransferMode("upload"));
 $("downloadTab").addEventListener("click", () => showTransferMode("download"));
