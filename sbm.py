@@ -1,6 +1,8 @@
 # receive_chunked.py  (pip install flask)
 import atexit, hashlib, hmac, mimetypes, os, re, json, shutil, socket, uuid, threading, zipfile, time, secrets, ctypes
+import ipaddress
 from datetime import datetime, timezone
+from io import BytesIO
 from urllib.parse import urlparse
 from flask import Flask, Response, abort, request, jsonify, render_template, send_file, stream_with_context, url_for, redirect, flash
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
@@ -11,7 +13,7 @@ from pillow_heif import register_heif_opener
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
-from database import db, migrate, User, AuditEvent, audit_buffer, start_audit_flush_worker
+from database import db, migrate, User, AuditEvent, Favorite, audit_buffer, start_audit_flush_worker
 
 register_heif_opener()
 
@@ -47,6 +49,7 @@ os.makedirs(TMP_DIR, exist_ok=True)
 app = Flask(__name__,
              template_folder=os.path.join('templates'),
              static_folder=os.path.join('static'))
+app.instance_path = os.path.abspath(os.getenv("SBM_INSTANCE_DIR", app.instance_path))
 os.makedirs(app.instance_path, exist_ok=True)
 
 def _load_secret_key():
@@ -84,6 +87,8 @@ login_manager.login_view = "login"
 login_manager.login_message = "Sign in to browse and download files."
 thumbnail_dir = os.path.join(app.instance_path, "thumbnails")
 os.makedirs(thumbnail_dir, exist_ok=True)
+THUMBNAIL_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+THUMBNAIL_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 download_tickets = {}
 download_ticket_lock = threading.Lock()
 setup_lock = threading.Lock()
@@ -379,7 +384,60 @@ def received_chunks(upload_id, total):
 @app.route("/")
 def index():
     from flask_wtf.csrf import generate_csrf
-    return render_template("index.html", csrf_token_value=generate_csrf())
+    return render_template("index.html", csrf_token_value=generate_csrf(),
+                           can_delete=current_user.is_authenticated and current_user.role == "admin")
+
+
+def connection_ipv4_addresses():
+    addresses = set()
+    try:
+        import psutil
+        interface_states = psutil.net_if_stats()
+        for name, interface_addresses in psutil.net_if_addrs().items():
+            state = interface_states.get(name)
+            if state is not None and not state.isup:
+                continue
+            for interface_address in interface_addresses:
+                if interface_address.family != socket.AF_INET:
+                    continue
+                address = ipaddress.ip_address(interface_address.address)
+                if not address.is_loopback and not address.is_link_local:
+                    addresses.add(str(address))
+    except ImportError:
+        try:
+            for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                address = ipaddress.ip_address(result[4][0])
+                if not address.is_loopback and not address.is_link_local:
+                    addresses.add(str(address))
+        except OSError:
+            app.logger.exception("Could not enumerate laptop IPv4 addresses")
+    except OSError:
+        app.logger.exception("Could not enumerate laptop IPv4 addresses")
+    return sorted(addresses) or ["127.0.0.1"]
+
+
+@app.route("/connect")
+def connection_qr_page():
+    addresses = connection_ipv4_addresses()
+    return render_template("connect.html", addresses=addresses, port=int(os.getenv("SBM_PORT", "8000")))
+
+
+@app.route("/connect/qr.svg")
+def connection_qr_image():
+    address = request.args.get("ip", "")
+    if address not in connection_ipv4_addresses():
+        abort(400, description="Choose one of this laptop's detected IPv4 addresses.")
+    import qrcode
+    from qrcode.image.svg import SvgPathImage
+
+    target = f"http://{address}:{int(os.getenv('SBM_PORT', '8000'))}/"
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=4)
+    qr.add_data(target)
+    image = qr.make_image(image_factory=SvgPathImage)
+    output = BytesIO()
+    image.save(output)
+    output.seek(0)
+    return send_file(output, mimetype="image/svg+xml", max_age=0)
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
@@ -468,6 +526,62 @@ def drive_relative_path(root, path):
 
 def _queue_audit(action, drive, path):
     audit_buffer.add(app, current_user.id, action, drive.upper(), path.replace("\\", "/"))
+
+
+def cleanup_thumbnail_cache(max_age_seconds=THUMBNAIL_CACHE_MAX_AGE_SECONDS, now=None):
+    """Prune old cache files owned by the thumbnail/preview endpoints."""
+    now = time.time() if now is None else now
+    removed_files = removed_bytes = 0
+    try:
+        entries = list(os.scandir(thumbnail_dir))
+    except OSError:
+        app.logger.exception("Could not scan the thumbnail cache")
+        return {"files": 0, "bytes": 0}
+    for entry in entries:
+        cache_file = re.fullmatch(r"[0-9a-f]{64}\.(?:jpg|png)", entry.name)
+        partial_file = re.fullmatch(r"[0-9a-f]{64}\.(?:jpg|png)\.[0-9a-f]{32}\.tmp", entry.name)
+        if not cache_file and not partial_file:
+            continue
+        try:
+            if not entry.is_file(follow_symlinks=False):
+                continue
+            info = entry.stat(follow_symlinks=False)
+            expiry = max_age_seconds if cache_file else min(max_age_seconds, 24 * 60 * 60)
+            if now - info.st_mtime < expiry:
+                continue
+            os.remove(entry.path)
+            removed_files += 1
+            removed_bytes += info.st_size
+        except OSError:
+            app.logger.debug("Could not remove expired thumbnail cache file %s", entry.path, exc_info=True)
+    if removed_files:
+        app.logger.info("Removed %s expired thumbnail cache files (%s bytes)", removed_files, removed_bytes)
+    return {"files": removed_files, "bytes": removed_bytes}
+
+
+class ThumbnailCleanupWorker:
+    def __init__(self, interval_seconds, max_age_seconds):
+        self.interval_seconds = interval_seconds
+        self.max_age_seconds = max_age_seconds
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="sbm-thumbnail-cleaner", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.stop_event.wait(self.interval_seconds):
+            cleanup_thumbnail_cache(self.max_age_seconds)
+
+    def shutdown(self):
+        self.stop_event.set()
+        self.thread.join(timeout=2)
+
+
+def start_thumbnail_cleanup_worker(interval_seconds=THUMBNAIL_CLEANUP_INTERVAL_SECONDS,
+                                   max_age_seconds=THUMBNAIL_CACHE_MAX_AGE_SECONDS):
+    cleanup_thumbnail_cache(max_age_seconds)
+    worker = ThumbnailCleanupWorker(interval_seconds, max_age_seconds)
+    atexit.register(worker.shutdown)
+    return worker
 
 
 def _ticket(user_id, kind, drive, path, filename=None):
@@ -575,7 +689,7 @@ def admin_audit():
     action = request.args.get("action", "")
     username = request.args.get("username", "").strip()
     path_filter = request.args.get("path", "").strip()
-    if action in ("preview", "download"):
+    if action in ("preview", "download", "delete", "delete_attempt", "delete_failed"):
         query = query.filter(AuditEvent.action == action)
     if username:
         query = query.filter(User.username.ilike(f"%{username}%"))
@@ -601,6 +715,10 @@ def browse_files():
     if not os.path.isdir(directory):
         abort(400, description="path is not a folder")
     root = next(d for d in list_fixed_drives() if d[:2].casefold() == drive.casefold())
+    favorite_paths = {
+        favorite.path.casefold()
+        for favorite in Favorite.query.filter_by(user_id=current_user.id, drive=drive[:2].upper()).all()
+    }
     items = []
     try:
         with os.scandir(directory) as scan:
@@ -625,11 +743,14 @@ def browse_files():
                             pass
                     except OSError:
                         continue
-                    items.append({"name": entry.name, "path": rel, "type": "directory"})
+                    items.append({"name": entry.name, "path": rel, "type": "directory",
+                                  "favorite": rel.casefold() in favorite_paths})
                 elif entry.is_file(follow_symlinks=False):
                     ext = os.path.splitext(entry.name)[1].lower()
                     kind = "image" if ext in IMAGE_EXTENSIONS else "video" if ext in VIDEO_EXTENSIONS else "file"
-                    row = {"name": entry.name, "path": rel, "type": kind, "size": entry.stat(follow_symlinks=False).st_size}
+                    row = {"name": entry.name, "path": rel, "type": kind,
+                           "size": entry.stat(follow_symlinks=False).st_size,
+                           "favorite": rel.casefold() in favorite_paths}
                     if kind == "image":
                         row["thumbnail"] = url_for("thumbnail", drive=drive[:2], path=rel)
                     items.append(row)
@@ -638,6 +759,114 @@ def browse_files():
     except OSError:
         abort(403, description="cannot read folder")
     return jsonify(drive=drive[:2].upper(), path=drive_relative_path(root, directory), items=items)
+
+
+@app.route("/api/favorites", methods=["POST"])
+@login_required
+def update_favorite():
+    body = request.get_json(silent=True) or {}
+    drive = body.get("drive", "")
+    relative_path = body.get("path", "")
+    is_favorite = body.get("favorite")
+    if not isinstance(is_favorite, bool) or not isinstance(relative_path, str) or not relative_path:
+        abort(400, description="drive, file or folder path, and favorite state are required")
+
+    normalized_drive = drive[:2].upper() if isinstance(drive, str) else ""
+    if normalized_drive not in {d[:2].upper() for d in list_fixed_drives()}:
+        abort(400, description="drive is not available")
+    if is_favorite:
+        resolved = resolve_drive_path(normalized_drive, relative_path)
+        if not (os.path.isfile(resolved) or os.path.isdir(resolved)):
+            abort(400, description="only files and folders can be favorited")
+        root = next(d for d in list_fixed_drives() if d[:2].casefold() == normalized_drive.casefold())
+        normalized_path = drive_relative_path(root, resolved).replace("\\", "/")
+    else:
+        # Permit removing stale favorites even after the source was moved/deleted.
+        normalized_path = relative_path.replace("\\", "/").strip("/")
+        if not normalized_path or any(part in (".", "..") for part in normalized_path.split("/")):
+            abort(400, description="invalid favorite path")
+    favorite = Favorite.query.filter_by(user_id=current_user.id, drive=normalized_drive,
+                                        path=normalized_path).first()
+    if is_favorite and favorite is None:
+        db.session.add(Favorite(user_id=current_user.id, drive=normalized_drive,
+                                path=normalized_path, item_type="directory" if os.path.isdir(resolved) else "file"))
+        db.session.commit()
+    elif not is_favorite and favorite is not None:
+        db.session.delete(favorite)
+        db.session.commit()
+    return jsonify(ok=True, favorite=is_favorite, drive=normalized_drive, path=normalized_path)
+
+
+@app.route("/api/delete", methods=["POST"])
+@admin_required
+def delete_file():
+    body = request.get_json(silent=True) or {}
+    drive, relative_path = body.get("drive", ""), body.get("path", "")
+    path = resolve_drive_path(drive, relative_path)
+    if not os.path.isfile(path):
+        abort(400, description="only individual files can be deleted")
+    normalized_drive = drive[:2].upper()
+    root = next(d for d in list_fixed_drives() if d[:2].casefold() == normalized_drive.casefold())
+    normalized_path = drive_relative_path(root, path).replace("\\", "/")
+
+    # Persist the actor before removing the source file so a database error can
+    # never silently turn a successful deletion into an unattributed one.
+    event = AuditEvent(user_id=current_user.id, action="delete_attempt", drive=normalized_drive,
+                       path=normalized_path, created_at=datetime.now(timezone.utc))
+    db.session.add(event)
+    db.session.commit()
+    try:
+        os.remove(path)
+    except OSError:
+        event.action = "delete_failed"
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Could not persist failed file deletion status")
+        return jsonify(error="The file could not be deleted. It may be in use or access may be denied."), 409
+    event.action = "delete"
+    audit_recorded = True
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        audit_recorded = False
+        app.logger.exception("File was deleted but its audit status could not be finalized")
+    return jsonify(ok=True, deleted=True, drive=normalized_drive, path=normalized_path,
+                   deleted_by=current_user.username, audit_recorded=audit_recorded)
+
+
+@app.route("/api/favorites")
+@login_required
+def list_favorites():
+    favorites = Favorite.query.filter_by(user_id=current_user.id).order_by(Favorite.created_at.desc(), Favorite.id.desc()).all()
+    roots = {drive[:2].upper(): drive for drive in list_fixed_drives()}
+    items = []
+    for favorite in favorites:
+        drive = favorite.drive[:2].upper()
+        relative_path = favorite.path.replace("\\", "/")
+        name = relative_path.rsplit("/", 1)[-1] or drive
+        item = {"drive": drive, "path": relative_path, "name": name,
+                "type": favorite.item_type, "favorite": True, "available": False}
+        root = roots.get(drive)
+        if root:
+            try:
+                resolved = resolve_drive_path(drive, relative_path)
+                if os.path.isfile(resolved):
+                    ext = os.path.splitext(resolved)[1].lower()
+                    item["type"] = "image" if ext in IMAGE_EXTENSIONS else "video" if ext in VIDEO_EXTENSIONS else "file"
+                    item["size"] = os.path.getsize(resolved)
+                    if item["type"] == "image":
+                        item["thumbnail"] = url_for("thumbnail", drive=drive, path=relative_path)
+                    item["available"] = True
+                elif os.path.isdir(resolved):
+                    item["type"] = "directory"
+                    item["available"] = True
+            except (HTTPException, OSError, StopIteration):
+                pass
+        items.append(item)
+    return jsonify(items=items)
 
 
 def _send_media(drive, relative_path, inline):
@@ -676,7 +905,57 @@ def thumbnail():
                 image.save(thumb_path, "JPEG", quality=82, optimize=True)
         except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
             abort(415, description="image could not be previewed")
+    try:
+        os.utime(thumb_path, None)
+    except OSError:
+        pass
     return send_file(thumb_path, mimetype="image/jpeg", max_age=3600)
+
+
+def _image_preview_file(path):
+    """Return a cached, screen-sized image rendition without altering downloads."""
+    stat = os.stat(path)
+    cache_key = hashlib.sha256(f"preview:{os.path.normcase(path)}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()
+    try:
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+            has_alpha = image.mode in ("RGBA", "LA") or "transparency" in image.info
+            suffix = ".png" if has_alpha else ".jpg"
+            cached_path = os.path.join(thumbnail_dir, cache_key + suffix)
+            if not os.path.exists(cached_path):
+                temp_path = cached_path + "." + uuid.uuid4().hex + ".tmp"
+                if has_alpha:
+                    image.convert("RGBA").save(temp_path, "PNG", optimize=True)
+                else:
+                    image.convert("RGB").save(temp_path, "JPEG", quality=82, optimize=True)
+                try:
+                    os.replace(temp_path, cached_path)
+                finally:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+            return cached_path, "image/png" if has_alpha else "image/jpeg"
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
+        abort(415, description="image could not be previewed")
+
+
+@app.route("/api/image-preview")
+@login_required
+def optimized_image_preview():
+    path = resolve_drive_path(request.args.get("drive", ""), request.args.get("path", ""))
+    if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
+        abort(415, description="image preview is not supported")
+    cached_path, mimetype = _image_preview_file(path)
+    try:
+        os.utime(cached_path, None)
+    except OSError:
+        pass
+    response = send_file(cached_path, mimetype=mimetype, max_age=3600, conditional=True)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
 
 
 @app.route("/api/preview")
@@ -694,7 +973,8 @@ def audit_preview():
     if not os.path.isfile(path) or os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
         abort(415)
     _queue_audit("preview", drive, relative_path)
-    return jsonify(ok=True, url=url_for("preview_media", drive=drive[:2], path=relative_path))
+    endpoint = "optimized_image_preview" if os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS else "preview_media"
+    return jsonify(ok=True, url=url_for(endpoint, drive=drive[:2], path=relative_path))
 
 
 @app.route("/api/download/ticket", methods=["POST"])
@@ -960,6 +1240,12 @@ if __name__ == "__main__":
         migrate_upgrade(directory=os.path.join(os.path.dirname(__file__), "migrations"))
         ensure_setup_token()
     start_audit_flush_worker(app, interval_seconds=300)
-    ip = socket.gethostbyname(socket.gethostname())
-    print(f"Open on iPhone: http://{ip}:8000")
-    app.run(host="0.0.0.0", port=8000, threaded=True)
+    start_thumbnail_cleanup_worker()
+    addresses = sorted({item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+                        if not item[4][0].startswith(("127.", "169.254."))})
+    if addresses:
+        for ip in addresses:
+            print(f"Open on iPhone: http://{ip}:8000")
+    else:
+        print("Open on this laptop: http://127.0.0.1:8000")
+    app.run(host="0.0.0.0", port=int(os.getenv("SBM_PORT", "8000")), threaded=True)
