@@ -1,8 +1,8 @@
-{% extends "auth_base.html" %}{% set title = "Download and preview audit" %}
+{% extends "auth_base.html" %}{% set title = "File activity audit" %}
 {% block body %}
 <nav class="admin-nav"><a href="{{ url_for('index') }}">Transfers</a><a href="{{ url_for('admin_users') }}">Accounts</a></nav>
 <form class="card audit-filters" method="get">
-  <label>Action<select name="action"><option value="">All</option><option value="preview" {{ 'selected' if filters.action == 'preview' }}>Preview</option><option value="download" {{ 'selected' if filters.action == 'download' }}>Download</option></select></label>
+  <label>Action<select name="action"><option value="">All</option><option value="preview" {{ 'selected' if filters.action == 'preview' }}>Preview</option><option value="download" {{ 'selected' if filters.action == 'download' }}>Download</option><option value="delete" {{ 'selected' if filters.action == 'delete' }}>Delete</option><option value="delete_attempt" {{ 'selected' if filters.action == 'delete_attempt' }}>Delete outcome pending</option><option value="delete_failed" {{ 'selected' if filters.action == 'delete_failed' }}>Delete failed</option></select></label>
   <label>User<input name="username" value="{{ filters.username }}"></label><label>Path contains<input name="path" value="{{ filters.path }}"></label>
   <button class="ghost small">Filter</button>
 </form>

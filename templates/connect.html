@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Connect phone · SBM</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
+</head>
+<body>
+  <main class="connect-page">
+    <header class="site-header">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+      <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div>
+      <p class="header-caption">Bring your phone<br>into the light.</p>
+    </header>
+    <section class="connect-sheet">
+      <div class="connect-copy">
+        <p class="eyebrow">PAIR A DEVICE</p>
+        <h2>Connect your phone</h2>
+        <p>Select the laptop connection your phone can reach, then scan the code to open SBM.</p>
+        <label for="address">Laptop connection</label>
+        <select id="address">
+          {% for address in addresses %}<option value="{{ address }}">{{ address }}</option>{% endfor %}
+        </select>
+        <p class="hint connect-hint">For USB transfer, choose the iPhone Personal Hotspot address. Keep SBM running while connected.</p>
+      </div>
+      <div class="qr-frame">
+        <img class="qr" id="qr" src="{{ url_for('connection_qr_image', ip=addresses[0]) }}" alt="QR code for the selected laptop address">
+        <div class="url" id="url">http://{{ addresses[0] }}:{{ port }}/</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const selector = document.getElementById('address');
+    const qr = document.getElementById('qr');
+    const url = document.getElementById('url');
+    const port = {{ port|tojson }};
+    function update() {
+      const ip = selector.value;
+      qr.src = `/connect/qr.svg?ip=${encodeURIComponent(ip)}&t=${Date.now()}`;
+      url.textContent = `http://${ip}:${port}/`;
+    }
+    selector.addEventListener('change', update);
+  </script>
+</body>
+</html>

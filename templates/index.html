@@ -8,9 +8,12 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
 </head>
 <body>
-<main>
-  <h1>SBM File Transfer</h1>
-  <p class="sub">Move files between this device and your laptop over the local connection.</p>
+<main data-can-delete="{{ can_delete|tojson }}">
+  <header class="site-header">
+    <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div>
+    <p class="header-caption">Your files, moving<br>between nearby devices.</p>
+  </header>
 
   {% if current_user.is_authenticated %}
   <div class="account-bar">
@@ -78,11 +81,16 @@
     <div class="card browser-card">
       <div class="browser-title">
         <div>
-          <h2>Files on laptop</h2>
-          <p class="hint">Choose files or folders to download through your browser.</p>
+          <p class="eyebrow">LAPTOP LIBRARY</p><h2>Choose something to bring over</h2>
+          <p class="hint">Open a row to preview or enter a folder. Save favorites for next time.</p>
         </div>
         <button class="ghost small" id="refreshFiles" type="button">Refresh</button>
       </div>
+      <div class="library-switch" role="tablist" aria-label="Browse laptop files">
+        <button id="browseTab" class="library-tab active" role="tab" aria-selected="true" type="button">Browse</button>
+        <button id="favoritesTab" class="library-tab" role="tab" aria-selected="false" type="button">★ Favorites <span id="favoriteCount" class="favorite-count"></span></button>
+      </div>
+      <div id="browseControls">
       <div class="browser-nav">
         <label class="drive-picker">Drive <select id="drivePicker" aria-label="Choose fixed drive"></select></label>
         <button class="ghost small" id="browseHome" type="button">Root</button>
@@ -95,12 +103,19 @@
       </div>
       <p class="browser-status" id="browseStatus" role="status"></p>
       <div id="browseItems" class="browse-items"></div>
+      </div>
+      <div id="favoritesPanel" hidden>
+        <div class="favorites-intro"><span class="favorite-spark" aria-hidden="true">✳</span><p>Your keepers, gathered across drives. Tap a folder to jump in, or open a file to preview.</p></div>
+        <p class="browser-status" id="favoritesStatus" role="status"></p>
+        <div id="favoriteItems" class="browse-items favorite-items"></div>
+      </div>
     </div>
     <p class="hint download-hint">Downloads appear in Safari. Save them to Files; you can save photos and videos to Photos from there.</p>
+    {% if can_delete %}<p class="hint">The × control deletes an individual file after confirmation. Deletions are recorded in Audit history.</p>{% endif %}
   </section>
 </main>
 
-<div id="previewModal" class="preview-modal" hidden role="dialog" aria-modal="true" aria-label="Media preview">
+  <div id="previewModal" class="preview-modal" hidden role="dialog" aria-modal="true" aria-label="Media preview">
   <button id="closePreview" class="preview-close" type="button" aria-label="Close preview">×</button>
   <div id="previewContent" class="preview-content"></div>
   <p id="previewName"></p>

@@ -4,7 +4,9 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{ title }} · SBM</title><link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
 </head>
-<body><main class="auth-page"><h1>{{ title }}</h1>
-{% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<p class="flash {{ category }}">{{ message }}</p>{% endfor %}{% endwith %}
+<body><main class="auth-page">
+<header class="auth-brand"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div></header>
+<p class="eyebrow">{{ title|upper }}</p>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<p class="flash {{ category }}" role="status">{{ message }}</p>{% endfor %}{% endwith %}
 {% block body %}{% endblock %}
-<p class="hint"><a href="{{ url_for('index') }}">Back to transfers</a></p></main></body></html>
+<p class="hint auth-backlink"><a href="{{ url_for('index') }}">Back to transfers</a></p></main></body></html>

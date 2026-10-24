@@ -1,4 +1,5 @@
 const $ = id => document.getElementById(id);
+const canDeleteFiles = document.querySelector("main")?.dataset.canDelete === "true";
 const jobs = [];
 let running = false, cancelled = false;
 const activeXhrs = new Set();
@@ -413,6 +414,7 @@ refreshUI();
 let browsePath = "";
 let browseLoaded = false;
 let selectedDrive = "";
+let libraryView = "browse";
 const selectedDownloadItems = new Map();
 
 function csrfHeaders() {
@@ -455,11 +457,15 @@ async function loadBrowse(path = browsePath) {
     for (const item of data.items) {
       const row = document.createElement("div");
       row.className = "browse-row";
+      row.tabIndex = 0;
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", item.type === "directory" ? "Folder " + item.name : "File " + item.name);
 
-      const label = document.createElement("label");
-      label.className = "browse-entry";
+      const entry = document.createElement("div");
+      entry.className = "browse-entry";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
+      checkbox.className = "browse-select";
       checkbox.setAttribute("aria-label", "Select " + item.name);
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) selectedDownloadItems.set(item.path, item);
@@ -472,28 +478,35 @@ async function loadBrowse(path = browsePath) {
       const meta = document.createElement("span");
       meta.className = "browse-meta";
       meta.textContent = item.type === "directory" ? "Folder" : fmtSize(item.size);
-      label.append(checkbox, name, meta);
-      row.append(label);
+      entry.append(name, meta);
 
       if (item.type === "image") {
         const thumb = document.createElement("img");
         thumb.className = "browse-thumb"; thumb.loading = "lazy"; thumb.alt = ""; thumb.src = item.thumbnail;
-        thumb.addEventListener("click", () => openPreview(item)); row.prepend(thumb);
+        row.append(thumb);
       }
-      if (item.type === "image" || item.type === "video") {
-        const preview = document.createElement("button");
-        preview.type = "button"; preview.className = "ghost small open-folder"; preview.textContent = "Preview";
-        preview.addEventListener("click", () => openPreview(item)); row.append(preview);
-      }
+      const favorite = document.createElement("button");
+      favorite.type = "button";
+      favorite.className = "favorite-button";
+      updateFavoriteButton(favorite, item);
+      favorite.addEventListener("click", event => {
+        event.stopPropagation();
+        setFavorite(item, favorite);
+      });
+      row.append(entry, favorite);
+      if (canDeleteFiles && item.type !== "directory") row.append(createDeleteButton(item, row));
+      row.append(checkbox);
 
-      if (item.type === "directory") {
-        const open = document.createElement("button");
-        open.type = "button";
-        open.className = "ghost small open-folder";
-        open.textContent = "Open";
-        open.addEventListener("click", () => loadBrowse(item.path));
-        row.append(open);
-      }
+      row.addEventListener("click", event => {
+        if (event.target.closest("button, input, a")) return;
+        openBrowseItem(item);
+      });
+      row.addEventListener("keydown", event => {
+        if ((event.key === "Enter" || event.key === " ") && event.target === row) {
+          event.preventDefault();
+          openBrowseItem(item);
+        }
+      });
       $("browseItems").append(row);
     }
     $("browseStatus").textContent = "";
@@ -502,6 +515,184 @@ async function loadBrowse(path = browsePath) {
   } catch (error) {
     $("browseStatus").textContent = error.message || "Could not load files.";
   }
+}
+
+function renderFavoriteItems(items) {
+  const container = $("favoriteItems");
+  container.replaceChildren();
+  $("favoriteCount").textContent = items.length ? String(items.length) : "";
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-folder";
+    empty.textContent = "No favorites yet. Star a file or folder while browsing.";
+    container.append(empty);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "browse-row favorite-row" + (item.available ? "" : " unavailable");
+    row.tabIndex = 0;
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", `${item.available ? "Favorite" : "Unavailable favorite"}: ${item.name}, ${item.drive}`);
+    if (item.type === "image" && item.thumbnail) {
+      const thumb = document.createElement("img");
+      thumb.className = "browse-thumb"; thumb.loading = "lazy"; thumb.alt = ""; thumb.src = item.thumbnail;
+      row.append(thumb);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "favorite-kind";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = item.type === "directory" ? "▰" : item.type === "video" ? "▶" : "∙";
+      row.append(icon);
+    }
+    const entry = document.createElement("div");
+    entry.className = "browse-entry favorite-entry";
+    const name = document.createElement("span"); name.className = "browse-name"; name.textContent = item.name;
+    const meta = document.createElement("span"); meta.className = "browse-meta";
+    meta.textContent = item.available
+      ? `${item.drive} · ${item.type === "directory" ? "Folder" : item.size == null ? "File" : fmtSize(item.size)}`
+      : `${item.drive} · Unavailable`;
+    entry.append(name, meta);
+    row.append(entry);
+
+    const favorite = document.createElement("button");
+    favorite.type = "button"; favorite.className = "favorite-button is-favorite";
+    favorite.textContent = "★"; favorite.title = "Remove from favorites";
+    favorite.setAttribute("aria-label", `Remove ${item.name} from favorites`);
+    favorite.setAttribute("aria-pressed", "true");
+    favorite.addEventListener("click", async event => {
+      event.stopPropagation();
+      await setFavorite(item, favorite);
+    });
+    row.append(favorite);
+    if (canDeleteFiles && item.available && item.type !== "directory") row.append(createDeleteButton(item, row));
+    row.addEventListener("click", event => {
+      if (event.target.closest("button, input, a") || !item.available) return;
+      activateFavorite(item);
+    });
+    row.addEventListener("keydown", event => {
+      if ((event.key === "Enter" || event.key === " ") && event.target === row && item.available) {
+        event.preventDefault(); activateFavorite(item);
+      }
+    });
+    container.append(row);
+  }
+}
+
+function createDeleteButton(item, row) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "delete-button";
+  button.textContent = "×";
+  button.title = "Delete file";
+  button.setAttribute("aria-label", "Delete " + item.name);
+  button.addEventListener("click", event => {
+    event.stopPropagation();
+    deleteFile(item, row, button);
+  });
+  return button;
+}
+
+async function deleteFile(item, row, button) {
+  const drive = item.drive || selectedDrive;
+  const fullPath = drive + "\\" + item.path.replaceAll("/", "\\");
+  if (!window.confirm(`Permanently delete this file?\n\n${fullPath}\n\nThis cannot be undone.`)) return;
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/delete", {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ drive, path: item.path }),
+    });
+    if (response.status === 401) return loginRedirect();
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not delete this file.");
+    selectedDownloadItems.delete(item.path);
+    updateDownloadSelection();
+    row.remove();
+    const status = libraryView === "favorites" ? $("favoritesStatus") : $("browseStatus");
+    status.textContent = `Deleted ${item.name}. Recorded under ${result.deleted_by}.`;
+    if (libraryView === "favorites") loadFavorites();
+  } catch (error) {
+    const status = libraryView === "favorites" ? $("favoritesStatus") : $("browseStatus");
+    status.textContent = error.message || "Could not delete this file.";
+    button.disabled = false;
+  }
+}
+
+function activateFavorite(item) {
+  selectedDrive = item.drive;
+  $("drivePicker").value = selectedDrive;
+  if (item.type === "directory") {
+    showLibraryView("browse");
+    browseLoaded = false;
+    loadBrowse(item.path);
+  } else if (item.type === "image" || item.type === "video") {
+    openPreview(item);
+  } else {
+    saveOne(item);
+  }
+}
+
+async function loadFavorites() {
+  $("favoritesStatus").textContent = "Loading favorites…";
+  try {
+    const response = await fetch("/api/favorites");
+    if (response.status === 401) return loginRedirect();
+    if (!response.ok) throw new Error("Could not load favorites (" + response.status + ")");
+    const data = await response.json();
+    renderFavoriteItems(data.items || []);
+    $("favoritesStatus").textContent = "";
+  } catch (error) {
+    $("favoritesStatus").textContent = error.message || "Could not load favorites.";
+  }
+}
+
+function showLibraryView(view) {
+  libraryView = view;
+  const favorites = view === "favorites";
+  $("browseControls").hidden = favorites;
+  $("favoritesPanel").hidden = !favorites;
+  $("browseTab").classList.toggle("active", !favorites);
+  $("favoritesTab").classList.toggle("active", favorites);
+  $("browseTab").setAttribute("aria-selected", String(!favorites));
+  $("favoritesTab").setAttribute("aria-selected", String(favorites));
+  if (favorites) loadFavorites();
+}
+
+function updateFavoriteButton(button, item) {
+  button.textContent = item.favorite ? "★" : "☆";
+  button.classList.toggle("is-favorite", Boolean(item.favorite));
+  button.setAttribute("aria-pressed", String(Boolean(item.favorite)));
+  button.setAttribute("aria-label", (item.favorite ? "Remove " : "Add ") + item.name + " " + (item.favorite ? "from" : "to") + " favorites");
+  button.title = item.favorite ? "Remove from favorites" : "Add to favorites";
+}
+
+async function setFavorite(item, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/favorites", {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ drive: item.drive || selectedDrive, path: item.path, favorite: !item.favorite }),
+    });
+    if (response.status === 401) return loginRedirect();
+    if (!response.ok) throw new Error("Could not update favorite (" + response.status + ")");
+    const result = await response.json();
+    item.favorite = result.favorite;
+    updateFavoriteButton(button, item);
+    loadFavorites();
+  } catch (error) {
+    $("browseStatus").textContent = error.message || "Could not update favorite.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function openBrowseItem(item) {
+  if (item.type === "directory") loadBrowse(item.path);
+  else if (item.type === "image" || item.type === "video") openPreview(item);
+  else saveOne(item);
 }
 
 function showTransferMode(mode) {
@@ -533,7 +724,8 @@ async function loadDrives() {
 
 async function openPreview(item) {
   try {
-    const response = await fetch("/api/audit/preview", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive: selectedDrive, path: item.path }) });
+    const drive = item.drive || selectedDrive;
+    const response = await fetch("/api/audit/preview", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive, path: item.path }) });
     if (response.status === 401) return loginRedirect();
     if (!response.ok) throw new Error("Preview could not be opened (" + response.status + ")");
     const result = await response.json();
@@ -547,7 +739,8 @@ async function openPreview(item) {
 
 async function saveOne(item) {
   try {
-    const response = await fetch("/api/download/ticket", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive: selectedDrive, path: item.path }) });
+    const drive = item.drive || selectedDrive;
+    const response = await fetch("/api/download/ticket", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive, path: item.path }) });
     if (response.status === 401) return loginRedirect();
     if (!response.ok) throw new Error("Download could not be prepared (" + response.status + ")");
     const ticket = await response.json(); window.location.assign(ticket.url);
@@ -559,6 +752,8 @@ $("previewModal").addEventListener("click", event => { if (event.target === $("p
 
 $("uploadTab").addEventListener("click", () => showTransferMode("upload"));
 $("downloadTab").addEventListener("click", () => showTransferMode("download"));
+$("browseTab").addEventListener("click", () => showLibraryView("browse"));
+$("favoritesTab").addEventListener("click", () => showLibraryView("favorites"));
 $("drivePicker").addEventListener("change", () => { selectedDrive = $("drivePicker").value; browseLoaded = false; selectedDownloadItems.clear(); loadBrowse(""); });
 $("refreshFiles").addEventListener("click", () => loadBrowse(browsePath));
 $("browseHome").addEventListener("click", () => loadBrowse(""));
