@@ -129,7 +129,7 @@ class DriveBrowserTests(unittest.TestCase):
 
     def assert_reparse_path_rejected(self):
         query = {"drive": self.drive[:2], "path": "escape"}
-        for endpoint in ("/api/browse", "/api/thumbnail", "/api/preview"):
+        for endpoint in ("/api/browse", "/api/thumbnail", "/api/preview", "/api/image-preview"):
             self.assertEqual(self.client.get(endpoint, query_string=query).status_code, 403)
         self.assertEqual(self.client.post("/api/download/ticket", json=query).status_code, 403)
         self.assertEqual(self.client.post("/api/download/archive", json={"drive": self.drive[:2], "base": "", "paths": ["escape"]}).status_code, 403)
@@ -152,6 +152,155 @@ class DriveBrowserTests(unittest.TestCase):
         heic_thumb = self.client.get("/api/thumbnail", query_string={"drive": self.drive[:2], "path": "phone-photo.heic"})
         self.assertEqual(heic_thumb.status_code, 200)
         heic_thumb.close()
+
+    def test_favorites_list_cross_drive_metadata_stale_removal_and_user_scope(self):
+        self.write_file("album/cover.jpg", b"not-decoded-until-preview")
+        self.write_file("clip.mp4", b"video")
+        self.client.post("/api/favorites", json={"drive": self.drive[:2], "path": "album", "favorite": True})
+        self.client.post("/api/favorites", json={"drive": self.drive[:2], "path": "album/cover.jpg", "favorite": True})
+        self.client.post("/api/favorites", json={"drive": self.drive[:2], "path": "clip.mp4", "favorite": True})
+        with sbm.app.app_context():
+            sbm.db.session.add(sbm.Favorite(user_id=self.admin_id, drive=self.drive[:2], path="missing/old.jpg", item_type="file"))
+            sbm.db.session.commit()
+        listed = self.client.get("/api/favorites")
+        self.assertEqual(listed.status_code, 200)
+        entries = listed.get_json()["items"]
+        by_path = {entry["path"]: entry for entry in entries}
+        self.assertTrue(by_path["album"]["available"])
+        self.assertEqual(by_path["album"]["type"], "directory")
+        self.assertEqual(by_path["album/cover.jpg"]["type"], "image")
+        self.assertIn("thumbnail", by_path["album/cover.jpg"])
+        self.assertEqual(by_path["clip.mp4"]["type"], "video")
+        self.assertFalse(by_path["missing/old.jpg"]["available"])
+        removed = self.client.post("/api/favorites", json={"drive": self.drive[:2], "path": "missing/old.jpg", "favorite": False})
+        self.assertEqual(removed.status_code, 200)
+        self.assertNotIn("missing/old.jpg", {entry["path"] for entry in self.client.get("/api/favorites").get_json()["items"]})
+
+        self.client.post("/logout")
+        with sbm.app.app_context():
+            other = sbm.User(username="other", password_hash=sbm.generate_password_hash("other-password-123"), role="user")
+            sbm.db.session.add(other)
+            sbm.db.session.commit()
+        response = self.client.get("/api/favorites")
+        self.assertEqual(response.status_code, 401)
+        self.client.post("/login", data={"username": "other", "password": "other-password-123"})
+        self.assertEqual(self.client.get("/api/favorites").get_json()["items"], [])
+
+    def test_optimized_image_preview_is_cached_bounded_and_preserves_alpha(self):
+        from PIL import Image
+        large_path = os.path.join(self.root, "large.jpg")
+        Image.new("RGB", (3000, 1500), "navy").save(large_path, quality=95)
+        params = {"drive": self.drive[:2], "path": "large.jpg"}
+        audit = self.client.post("/api/audit/preview", json=params)
+        self.assertEqual(audit.status_code, 200)
+        preview_url = audit.get_json()["url"]
+        self.assertIn("image-preview", preview_url)
+        first = self.client.get(preview_url)
+        self.assertEqual(first.status_code, 200)
+        with Image.open(BytesIO(first.data)) as rendition:
+            self.assertLessEqual(max(rendition.size), 2048)
+            self.assertEqual(rendition.format, "JPEG")
+        first_bytes = first.data
+        first.close()
+        second = self.client.get(preview_url)
+        self.assertEqual(second.data, first_bytes)
+        second.close()
+
+        Image.new("RGB", (3000, 1500), "red").save(large_path, quality=95)
+        refreshed = self.client.get(preview_url)
+        self.assertNotEqual(refreshed.data, first_bytes)
+        with Image.open(BytesIO(refreshed.data)) as rendition:
+            self.assertGreater(rendition.getpixel((0, 0))[0], 180)
+        refreshed.close()
+
+        oriented_path = os.path.join(self.root, "oriented.jpg")
+        oriented = Image.new("RGB", (40, 80), "orange")
+        exif = oriented.getexif()
+        exif[274] = 6
+        oriented.save(oriented_path, exif=exif)
+        orientation_response = self.client.get("/api/image-preview", query_string={"drive": self.drive[:2], "path": "oriented.jpg"})
+        with Image.open(BytesIO(orientation_response.data)) as rendition:
+            self.assertEqual(rendition.size, (80, 40))
+        orientation_response.close()
+
+        alpha_path = os.path.join(self.root, "alpha.png")
+        Image.new("RGBA", (80, 40), (20, 80, 140, 90)).save(alpha_path)
+        alpha = self.client.get("/api/image-preview", query_string={"drive": self.drive[:2], "path": "alpha.png"})
+        self.assertEqual(alpha.status_code, 200)
+        self.assertEqual(alpha.mimetype, "image/png")
+        with Image.open(BytesIO(alpha.data)) as rendition:
+            self.assertEqual(rendition.mode, "RGBA")
+            self.assertEqual(rendition.getpixel((0, 0))[3], 90)
+        alpha.close()
+
+    def test_delete_file_is_confirmed_by_api_and_audited_with_actor(self):
+        self.write_file("delete me.txt", b"private file")
+        response = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "delete me.txt"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["deleted_by"], "admin")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "delete me.txt")))
+        with sbm.app.app_context():
+            event = sbm.AuditEvent.query.filter_by(action="delete", path="delete me.txt").one()
+            self.assertEqual(event.user.username, "admin")
+            self.assertEqual(event.drive, self.drive[:2].upper())
+        audit = self.client.get("/admin/audit?action=delete")
+        self.assertEqual(audit.status_code, 200)
+        self.assertIn(b"delete me.txt", audit.data)
+        self.assertIn(b"admin", audit.data)
+
+    def test_delete_rejects_folders_and_records_failed_file_removal(self):
+        os.makedirs(os.path.join(self.root, "folder"), exist_ok=True)
+        folder = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "folder"})
+        self.assertEqual(folder.status_code, 400)
+        self.write_file("locked.bin", b"in use")
+        with patch("sbm.os.remove", side_effect=PermissionError("locked")):
+            failed = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "locked.bin"})
+        self.assertEqual(failed.status_code, 409)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "locked.bin")))
+        with sbm.app.app_context():
+            event = sbm.AuditEvent.query.filter_by(action="delete_failed", path="locked.bin").one()
+            self.assertEqual(event.user.username, "admin")
+
+    def test_thumbnail_cleanup_removes_expired_app_cache_and_worker_repeats(self):
+        import time
+        import hashlib
+        now = time.time()
+        expired_name = hashlib.sha256(b"expired-cache-test").hexdigest() + ".jpg"
+        partial_name = hashlib.sha256(b"partial-cache-test").hexdigest() + ".jpg." + ("a" * 32) + ".tmp"
+        fresh_name = hashlib.sha256(b"fresh-cache-test").hexdigest() + ".png"
+        arbitrary_name = "leave-this-file-alone.txt"
+        expired = os.path.join(sbm.thumbnail_dir, expired_name)
+        partial = os.path.join(sbm.thumbnail_dir, partial_name)
+        fresh = os.path.join(sbm.thumbnail_dir, fresh_name)
+        arbitrary = os.path.join(sbm.thumbnail_dir, arbitrary_name)
+        try:
+            for path in (expired, partial, fresh, arbitrary):
+                with open(path, "wb") as cached:
+                    cached.write(b"cache")
+            os.utime(expired, (now - 10 * 86400, now - 10 * 86400))
+            os.utime(partial, (now - 2 * 86400, now - 2 * 86400))
+            cleaned = sbm.cleanup_thumbnail_cache(max_age_seconds=7 * 86400, now=now)
+            self.assertEqual(cleaned["files"], 2)
+            self.assertFalse(os.path.exists(expired))
+            self.assertFalse(os.path.exists(partial))
+            self.assertTrue(os.path.exists(fresh))
+            self.assertTrue(os.path.exists(arbitrary))
+
+            worker = sbm.start_thumbnail_cleanup_worker(interval_seconds=0.02, max_age_seconds=1)
+            try:
+                os.utime(fresh, (time.time() - 2, time.time() - 2))
+                deadline = time.time() + 1
+                while os.path.exists(fresh) and time.time() < deadline:
+                    time.sleep(0.01)
+                self.assertFalse(os.path.exists(fresh))
+            finally:
+                worker.shutdown()
+        finally:
+            for path in (expired, partial, fresh, arbitrary):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def test_file_ticket_supports_ranges_and_logs_once(self):
         self.write_file("A clip.mp4", b"0123456789")
@@ -243,6 +392,7 @@ class AccountFlowTests(unittest.TestCase):
         token = sbm.get_setup_token()
         response = self.client.post("/setup", data={"token": token, "username": "rootadmin", "password": "admin-password-123"})
         self.assertEqual(response.status_code, 302)
+        self.assertIn(b'data-can-delete="true"', self.client.get("/").data)
         with sbm.app.app_context():
             admin = sbm.User.query.filter_by(username="rootadmin").one()
             self.assertNotEqual(admin.password_hash, "admin-password-123")
@@ -256,7 +406,9 @@ class AccountFlowTests(unittest.TestCase):
             user_id = user.id
         self.client.post("/logout")
         self.client.post("/login", data={"username": "phoneuser", "password": "phone-password-123"})
+        self.assertIn(b'data-can-delete="false"', self.client.get("/").data)
         self.assertEqual(self.client.get("/api/drives").status_code, 200)
+        self.assertEqual(self.client.post("/api/delete", json={"drive": "C:", "path": "not-authorized.txt"}).status_code, 403)
         self.assertEqual(self.client.get("/admin/users").status_code, 403)
         self.client.post("/logout")
         self.client.post("/login", data={"username": "rootadmin", "password": "admin-password-123"})
