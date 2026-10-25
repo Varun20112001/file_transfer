@@ -92,6 +92,17 @@
         <button id="browseTab" class="library-tab active" role="tab" aria-selected="true" type="button">Browse</button>
         <button id="favoritesTab" class="library-tab" role="tab" aria-selected="false" type="button">★ Favorites <span id="favoriteCount" class="favorite-count"></span></button>
       </div>
+      <div class="library-tools">
+        <span class="library-tools-label">View</span>
+        <div class="layout-toggle" role="group" aria-label="File display layout">
+          <button class="layout-button" type="button" data-library-layout="list" aria-pressed="true" aria-label="List view">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h10M3.5 5h.01M3.5 10h.01M3.5 15h.01"/></svg><span>List</span>
+          </button>
+          <button class="layout-button" type="button" data-library-layout="grid" aria-pressed="false" aria-label="Grid view">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3zM12 12h5v5h-5z"/></svg><span>Grid</span>
+          </button>
+        </div>
+      </div>
       <div id="browseControls">
       <div class="browser-nav">
         <label class="drive-picker">Drive <select id="drivePicker" aria-label="Choose fixed drive"></select></label>

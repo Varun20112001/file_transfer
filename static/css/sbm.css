@@ -151,3 +151,29 @@ body.arcade-page .url{color:var(--ink);font-weight:750}
 body.arcade-page button:focus-visible,body.arcade-page input:focus-visible,body.arcade-page select:focus-visible,body.arcade-page a:focus-visible{outline:3px solid var(--orange);outline-offset:3px}
 @media(max-width:700px){body.arcade-page .audit-filters{grid-template-columns:1fr 1fr}body.arcade-page .audit-filters button{grid-column:1/-1}}
 @media(max-width:560px){body.arcade-page .auth-brand,body.arcade-page .site-header{gap:9px}body.arcade-page .auth-brand .brand-mark,body.arcade-page .site-header .brand-mark{width:50px;height:50px}body.arcade-page .header-caption{font-size:10px;padding-left:8px}body.arcade-page .card,body.arcade-page .connect-sheet{padding:15px;box-shadow:4px 4px 0 var(--sky)}body.arcade-page .connect-sheet{grid-template-columns:1fr;gap:12px}body.arcade-page .audit-filters{grid-template-columns:1fr}body.arcade-page .audit-filters button{grid-column:auto}body.arcade-page .qr{width:220px}body.arcade-page .qr-frame{text-align:left}}
+
+/* Stage 3: one remembered layout control shared by Browse and Favorites. */
+body.transfer-page .library-tools{display:flex;align-items:center;justify-content:flex-end;gap:9px;padding:9px 19px;border-bottom:1px dashed var(--line)}
+body.transfer-page .library-tools-label{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink)}
+body.transfer-page .layout-toggle{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--ink);border-radius:9px;background:var(--surface-2)}
+body.transfer-page .layout-button{display:flex;align-items:center;gap:5px;padding:6px 9px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink);font:700 12px system-ui,-apple-system,"Segoe UI",sans-serif}
+body.transfer-page .layout-button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+body.transfer-page .layout-button.active{background:var(--lime);border-color:var(--ink);box-shadow:2px 2px 0 var(--orange)}
+body.transfer-page .browse-kind{display:grid;place-items:center;width:48px;height:48px;flex:none;border:1px solid var(--ink);border-radius:7px;background:var(--surface-2);color:var(--ink);font-size:22px}
+body.transfer-page .browse-items.grid-mode{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;padding:12px;border-top:1px solid var(--line)}
+body.transfer-page .grid-mode .browse-row{position:relative;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:118px auto;align-content:start;min-width:0;min-height:202px;padding:0;overflow:hidden;border:1px solid var(--ink);border-radius:10px;background:var(--surface);box-shadow:2px 2px 0 var(--line)}
+body.transfer-page .grid-mode .browse-thumb,body.transfer-page .grid-mode .browse-kind,body.transfer-page .grid-mode .favorite-kind{grid-column:1;grid-row:1;width:100%;height:118px;object-fit:cover;border:0;border-radius:0;background:var(--surface-2)}
+body.transfer-page .grid-mode .browse-kind,body.transfer-page .grid-mode .favorite-kind{font-size:40px;color:var(--ink)}
+body.transfer-page .grid-mode .browse-entry{grid-column:1;grid-row:2;display:flex;flex-direction:column;align-items:flex-start;align-self:stretch;gap:3px;min-width:0;padding:9px 42px 12px 11px}
+body.transfer-page .grid-mode .browse-name,body.transfer-page .grid-mode .browse-meta{width:100%;flex:none;text-align:left}
+body.transfer-page .grid-mode .browse-name{font-size:13px;font-weight:800;line-height:1.25}
+body.transfer-page .grid-mode .browse-meta{font-size:10px;overflow-wrap:anywhere}
+body.transfer-page .grid-mode .favorite-button{position:absolute;z-index:1;top:7px;right:7px;width:38px;height:38px;border:1px solid var(--ink);border-radius:8px;background:var(--surface);box-shadow:1px 1px 0 var(--ink)}
+body.transfer-page .grid-mode .browse-select{position:absolute;z-index:1;top:15px;left:10px;width:19px;height:19px;margin:0;accent-color:var(--orange)}
+body.transfer-page .grid-mode .delete-button{position:absolute;z-index:1;right:7px;bottom:7px;width:35px;height:35px;border:1px solid var(--ink);border-radius:8px;background:var(--surface);color:var(--ink)}
+body.transfer-page .grid-mode .browse-row:hover{background:#E8F8F7;box-shadow:3px 3px 0 var(--orange);transform:translateY(-1px)}
+body.transfer-page .grid-mode .empty-folder{grid-column:1/-1}
+body.transfer-page .grid-mode .unavailable .browse-name{text-decoration:line-through}
+body.transfer-page .layout-button:focus-visible{outline:3px solid var(--orange);outline-offset:2px}
+@media(min-width:720px){body.transfer-page .browse-items.grid-mode{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){body.transfer-page .library-tools{padding:8px 12px}body.transfer-page .browse-items.grid-mode{gap:8px;padding:9px}body.transfer-page .grid-mode .browse-row{min-height:188px;grid-template-rows:104px auto}body.transfer-page .grid-mode .browse-thumb,body.transfer-page .grid-mode .browse-kind,body.transfer-page .grid-mode .favorite-kind{height:104px}}

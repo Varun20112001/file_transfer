@@ -5,6 +5,34 @@ let running = false, cancelled = false;
 const activeXhrs = new Set();
 let browseImageItems = [], favoriteImageItems = [];
 let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
+const libraryLayoutStorageKey = "sbm-library-layout";
+
+function readLibraryLayout() {
+  try {
+    return localStorage.getItem(libraryLayoutStorageKey) === "grid" ? "grid" : "list";
+  } catch (_) {
+    return "list";
+  }
+}
+
+let libraryLayout = readLibraryLayout();
+
+function setLibraryLayout(layout, persist = true) {
+  if (layout !== "list" && layout !== "grid") return;
+  libraryLayout = layout;
+  for (const id of ["browseItems", "favoriteItems"]) {
+    const container = $(id);
+    if (container) container.classList.toggle("grid-mode", layout === "grid");
+  }
+  document.querySelectorAll("[data-library-layout]").forEach(button => {
+    const selected = button.dataset.libraryLayout === layout;
+    button.setAttribute("aria-pressed", String(selected));
+    button.classList.toggle("active", selected);
+  });
+  if (persist) {
+    try { localStorage.setItem(libraryLayoutStorageKey, layout); } catch (_) { /* storage may be disabled */ }
+  }
+}
 
 function fmtSize(b) {
   if (b < 1024) return b + " B";
@@ -487,6 +515,12 @@ async function loadBrowse(path = browsePath) {
         const thumb = document.createElement("img");
         thumb.className = "browse-thumb"; thumb.loading = "lazy"; thumb.alt = ""; thumb.src = item.thumbnail;
         row.append(thumb);
+      } else {
+        const kind = document.createElement("span");
+        kind.className = "browse-kind";
+        kind.setAttribute("aria-hidden", "true");
+        kind.textContent = item.type === "directory" ? "▰" : item.type === "video" ? "▶" : "◇";
+        row.append(kind);
       }
       const favorite = document.createElement("button");
       favorite.type = "button";
@@ -889,6 +923,10 @@ $("uploadTab").addEventListener("click", () => showTransferMode("upload"));
 $("downloadTab").addEventListener("click", () => showTransferMode("download"));
 $("browseTab").addEventListener("click", () => showLibraryView("browse"));
 $("favoritesTab").addEventListener("click", () => showLibraryView("favorites"));
+document.querySelectorAll("[data-library-layout]").forEach(button => {
+  button.addEventListener("click", () => setLibraryLayout(button.dataset.libraryLayout));
+});
+setLibraryLayout(libraryLayout, false);
 $("drivePicker").addEventListener("change", () => { selectedDrive = $("drivePicker").value; browseLoaded = false; selectedDownloadItems.clear(); loadBrowse(""); });
 $("refreshFiles").addEventListener("click", () => loadBrowse(browsePath));
 $("browseHome").addEventListener("click", () => loadBrowse(""));
