@@ -248,10 +248,38 @@ class DriveBrowserTests(unittest.TestCase):
         self.assertIn(b"delete me.txt", audit.data)
         self.assertIn(b"admin", audit.data)
 
-    def test_delete_rejects_folders_and_records_failed_file_removal(self):
-        os.makedirs(os.path.join(self.root, "folder"), exist_ok=True)
-        folder = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "folder"})
-        self.assertEqual(folder.status_code, 400)
+    def test_delete_folder_recursively_removes_contents_and_audits_actor(self):
+        self.write_file("folder/nested/photo.jpg", b"photo")
+        self.write_file("folder/readme.txt", b"text")
+        response = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "folder"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["deleted_type"], "folder")
+        self.assertEqual(response.get_json()["deleted_by"], "admin")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "folder")))
+        with sbm.app.app_context():
+            event = sbm.AuditEvent.query.filter_by(action="delete", path="folder").one()
+            self.assertEqual(event.user.username, "admin")
+
+    def test_delete_rejects_drive_root_and_internal_or_reparse_contents(self):
+        root_delete = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": ""})
+        self.assertEqual(root_delete.status_code, 400)
+        protected_dir = os.path.join(self.root, "parent", "private")
+        os.makedirs(protected_dir, exist_ok=True)
+        with patch.object(sbm, "TMP_DIR", protected_dir):
+            parent = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "parent"})
+        self.assertEqual(parent.status_code, 403)
+
+    def test_delete_folder_records_failed_removal(self):
+        self.write_file("folder/item.txt", b"content")
+        with patch("shutil.rmtree", side_effect=PermissionError("locked")):
+            failed = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "folder"})
+        self.assertEqual(failed.status_code, 409)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "folder", "item.txt")))
+        with sbm.app.app_context():
+            event = sbm.AuditEvent.query.filter_by(action="delete_failed", path="folder").one()
+            self.assertEqual(event.user.username, "admin")
+
+    def test_delete_file_records_failed_removal(self):
         self.write_file("locked.bin", b"in use")
         with patch("sbm.os.remove", side_effect=PermissionError("locked")):
             failed = self.client.post("/api/delete", json={"drive": self.drive[:2], "path": "locked.bin"})

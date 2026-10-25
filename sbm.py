@@ -524,6 +524,41 @@ def drive_relative_path(root, path):
     return os.path.relpath(path, root).replace(os.sep, "/") if os.path.normcase(path) != os.path.normcase(root) else ""
 
 
+def _path_contains(parent, child):
+    """Return whether child is parent or a descendant of parent."""
+    try:
+        return os.path.normcase(os.path.commonpath([parent, child])) == os.path.normcase(parent)
+    except ValueError:
+        return False
+
+
+def _validate_recursive_delete(path, drive_root):
+    """Preflight a directory before recursive removal; never cross reparse points or app data."""
+    target = os.path.realpath(path)
+    root = os.path.realpath(drive_root)
+    if os.path.normcase(target) == os.path.normcase(root):
+        abort(400, description="a drive root cannot be deleted")
+
+    protected = [os.path.realpath(TMP_DIR), os.path.realpath(app.instance_path)]
+    if os.path.normcase(os.path.splitdrive(target)[0]) == os.path.normcase(os.path.splitdrive(SAVE_DIR)[0]):
+        protected.append(os.path.realpath(os.path.join(SAVE_DIR, ".chunks")))
+    for protected_path in protected:
+        if _path_contains(target, protected_path) or _path_contains(protected_path, target):
+            abort(403, description="folders containing SBM internal data cannot be deleted")
+
+    # A selected folder can contain junctions even though the selected path itself is safe.
+    # Reject them during preflight so deletion never traverses into another location.
+    for current, dirs, files in os.walk(path, topdown=True, followlinks=False):
+        for name in dirs + files:
+            child = os.path.join(current, name)
+            if _is_reparse_point(child):
+                abort(403, description="folders containing symbolic links or junctions cannot be deleted")
+            resolved = os.path.realpath(child)
+            if not _path_contains(root, resolved):
+                abort(403, description="folder contains a path outside the selected drive")
+        dirs[:] = [name for name in dirs if not _is_reparse_point(os.path.join(current, name))]
+
+
 def _queue_audit(action, drive, path):
     audit_buffer.add(app, current_user.id, action, drive.upper(), path.replace("\\", "/"))
 
@@ -803,10 +838,13 @@ def delete_file():
     body = request.get_json(silent=True) or {}
     drive, relative_path = body.get("drive", ""), body.get("path", "")
     path = resolve_drive_path(drive, relative_path)
-    if not os.path.isfile(path):
-        abort(400, description="only individual files can be deleted")
+    is_directory = os.path.isdir(path)
+    if not os.path.isfile(path) and not is_directory:
+        abort(400, description="path is not a file or folder")
     normalized_drive = drive[:2].upper()
     root = next(d for d in list_fixed_drives() if d[:2].casefold() == normalized_drive.casefold())
+    if is_directory:
+        _validate_recursive_delete(path, root)
     normalized_path = drive_relative_path(root, path).replace("\\", "/")
 
     # Persist the actor before removing the source file so a database error can
@@ -816,7 +854,11 @@ def delete_file():
     db.session.add(event)
     db.session.commit()
     try:
-        os.remove(path)
+        if is_directory:
+            import shutil
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
     except OSError:
         event.action = "delete_failed"
         try:
@@ -824,7 +866,8 @@ def delete_file():
         except Exception:
             db.session.rollback()
             app.logger.exception("Could not persist failed file deletion status")
-        return jsonify(error="The file could not be deleted. It may be in use or access may be denied."), 409
+        kind = "folder" if is_directory else "file"
+        return jsonify(error=f"The {kind} could not be deleted. It may be in use or access may be denied."), 409
     event.action = "delete"
     audit_recorded = True
     try:
@@ -832,8 +875,9 @@ def delete_file():
     except Exception:
         db.session.rollback()
         audit_recorded = False
-        app.logger.exception("File was deleted but its audit status could not be finalized")
+        app.logger.exception("Path was deleted but its audit status could not be finalized")
     return jsonify(ok=True, deleted=True, drive=normalized_drive, path=normalized_path,
+                   deleted_type="folder" if is_directory else "file",
                    deleted_by=current_user.username, audit_recorded=audit_recorded)
 
 

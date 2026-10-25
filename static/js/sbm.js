@@ -584,7 +584,7 @@ async function loadBrowse(path = browsePath) {
         setFavorite(item, favorite);
       });
       row.append(entry, favorite);
-      if (canDeleteFiles && item.type !== "directory") row.append(createDeleteButton(item, row));
+      if (canDeleteFiles) row.append(createDeleteButton(item, row));
       row.append(checkbox);
 
       row.addEventListener("click", event => {
@@ -656,7 +656,7 @@ function renderFavoriteItems(items) {
       await setFavorite(item, favorite);
     });
     row.append(favorite);
-    if (canDeleteFiles && item.available && item.type !== "directory") row.append(createDeleteButton(item, row));
+    if (canDeleteFiles && item.available) row.append(createDeleteButton(item, row));
     row.addEventListener("click", event => {
       if (event.target.closest("button, input, a") || !item.available) return;
       activateFavorite(item);
@@ -675,8 +675,9 @@ function createDeleteButton(item, row) {
   button.type = "button";
   button.className = "delete-button";
   button.textContent = "×";
-  button.title = "Delete file";
-  button.setAttribute("aria-label", "Delete " + item.name);
+  const kind = item.type === "directory" ? "folder" : "file";
+  button.title = `Delete ${kind}`;
+  button.setAttribute("aria-label", `Delete ${kind} ${item.name}`);
   button.addEventListener("click", event => {
     event.stopPropagation();
     deleteFile(item, row, button);
@@ -687,7 +688,8 @@ function createDeleteButton(item, row) {
 async function deleteFile(item, row, button) {
   const drive = item.drive || selectedDrive;
   const fullPath = drive + "\\" + item.path.replaceAll("/", "\\");
-  if (!window.confirm(`Permanently delete this file?\n\n${fullPath}\n\nThis cannot be undone.`)) return;
+  const kind = item.type === "directory" ? "folder and all its contents" : "file";
+  if (!window.confirm(`Permanently delete this ${kind}?\n\n${fullPath}\n\nThis cannot be undone.`)) return;
   const deletingFromPreview = row === null;
   const currentView = libraryView;
   button.disabled = true;
@@ -699,13 +701,13 @@ async function deleteFile(item, row, button) {
     });
     if (response.status === 401) return loginRedirect();
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not delete this file.");
+    if (!response.ok) throw new Error(result.error || `Could not delete this ${item.type === "directory" ? "folder" : "file"}.`);
     selectedDownloadItems.delete(item.path);
     updateDownloadSelection();
     if (row) row.remove();
     if (deletingFromPreview) $("closePreview").click();
     const status = currentView === "favorites" ? $("favoritesStatus") : $("browseStatus");
-    const confirmation = `Deleted ${item.name}. Recorded under ${result.deleted_by}.`;
+    const confirmation = `Deleted ${item.name}${item.type === "directory" ? " and its contents" : ""}. Recorded under ${result.deleted_by}.`;
     if (deletingFromPreview) {
       if (currentView === "favorites") await loadFavorites();
       else if (drive === selectedDrive) await loadBrowse(browsePath);
@@ -715,7 +717,7 @@ async function deleteFile(item, row, button) {
     status.textContent = confirmation;
   } catch (error) {
     const status = currentView === "favorites" ? $("favoritesStatus") : $("browseStatus");
-    status.textContent = error.message || "Could not delete this file.";
+    status.textContent = error.message || `Could not delete this ${item.type === "directory" ? "folder" : "file"}.`;
     if (button.isConnected) button.disabled = false;
   }
 }
