@@ -41,6 +41,12 @@ logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 
 
+def bundled_resource(relative_path: str) -> Path:
+    """Resolve resources from source or the PyInstaller bundle."""
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return bundle_root / relative_path
+
+
 class SBMTrayApp:
     def __init__(self) -> None:
         self.server = None
@@ -94,12 +100,10 @@ class SBMTrayApp:
 
     def run(self) -> None:
         import pystray
-        from PIL import Image, ImageDraw
+        from PIL import Image
 
-        icon_image = Image.new("RGBA", (64, 64), (31, 111, 235, 255))
-        draw = ImageDraw.Draw(icon_image)
-        draw.rounded_rectangle((6, 6, 58, 58), radius=12, fill=(255, 255, 255, 255))
-        draw.text((15, 23), "SBM", fill=(31, 111, 235, 255))
+        with Image.open(bundled_resource("static/images/sbm-logo.png")) as brand_image:
+            icon_image = brand_image.convert("RGBA").resize((64, 64), Image.Resampling.LANCZOS)
         menu = pystray.Menu(
             pystray.MenuItem("Open admin", self._open_admin, default=True),
             pystray.MenuItem("Show phone QR code", self._show_qr),

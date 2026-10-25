@@ -14,6 +14,7 @@ try {
     $bundleArgs = @(
         '-m', 'PyInstaller', '--noconfirm', '--clean', '--windowed', '--onedir',
         '--name', 'SBM', '--distpath', 'dist', '--workpath', 'build\pyinstaller',
+        '--icon', 'static\images\sbm-app.ico',
         '--add-data', 'templates;templates',
         '--add-data', 'static;static',
         '--add-data', 'migrations;migrations',
