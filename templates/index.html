@@ -6,14 +6,16 @@
 <meta name="csrf-token" content="{{ csrf_token_value }}">
 <title>Send to laptop</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='images/sbm-logo.png') }}">
 </head>
-<body>
+<body class="transfer-page">
 <main data-can-delete="{{ can_delete|tojson }}">
   <header class="site-header">
-    <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-    <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div>
-    <p class="header-caption">Your files, moving<br>between nearby devices.</p>
+    <img class="brand-mark" src="{{ url_for('static', filename='images/sbm-logo.png') }}" alt="" aria-hidden="true">
+    <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Arcade</span></h1></div>
+    <p class="header-caption">Move your media<br>between nearby devices.</p>
   </header>
+  <div class="signal-trail" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
   {% if current_user.is_authenticated %}
   <div class="account-bar">
