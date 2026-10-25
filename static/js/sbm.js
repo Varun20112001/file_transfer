@@ -6,6 +6,7 @@ const activeXhrs = new Set();
 let browseImageItems = [], favoriteImageItems = [];
 let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
 let previewBackgroundState = null;
+let previewVideoFullscreen = false;
 const libraryLayoutStorageKey = "sbm-library-layout";
 
 function readLibraryLayout() {
@@ -841,6 +842,89 @@ function updatePreviewNavigation() {
   $("nextPhoto").disabled = !hasNext;
 }
 
+function previewMediaUrl(item) {
+  const url = new URL("/api/preview", window.location.href);
+  url.searchParams.set("drive", item.drive || selectedDrive);
+  url.searchParams.set("path", item.path);
+  return url.toString();
+}
+
+function previewStatus(message) {
+  const statusId = libraryView === "favorites" ? "favoritesStatus" : "browseStatus";
+  $(statusId).textContent = message;
+}
+
+function recordPreviewAudit(item, requestId) {
+  fetch("/api/audit/preview", {
+    method: "POST",
+    headers: csrfHeaders(),
+    body: JSON.stringify({ drive: item.drive || selectedDrive, path: item.path }),
+  }).then(response => {
+    if (response.status === 401) {
+      loginRedirect();
+      throw new Error("Please sign in again to preview this video.");
+    }
+    if (!response.ok) throw new Error("The preview could not be recorded (" + response.status + ").");
+  }).catch(error => {
+    if (requestId === previewRequestId && !$("previewModal").hidden) {
+      previewStatus(error.message || "The preview could not be recorded.");
+    }
+  });
+}
+
+function enterVideoFullscreen(media) {
+  if (typeof media.webkitEnterFullscreen === "function") {
+    try {
+      // iPhone Safari requires this native call to happen in the opening tap's gesture.
+      previewVideoFullscreen = true;
+      media.webkitEnterFullscreen();
+      return;
+    } catch (_) {
+      previewVideoFullscreen = false;
+    }
+  }
+  if (typeof media.requestFullscreen === "function") {
+    try {
+      previewVideoFullscreen = true;
+      const request = media.requestFullscreen({ navigationUI: "hide" });
+      if (request?.catch) request.catch(() => {
+        previewVideoFullscreen = false;
+        previewStatus("Fullscreen is unavailable here. Use the video controls to play inline.");
+      });
+    } catch (_) {
+      previewVideoFullscreen = false;
+    }
+  }
+}
+
+function loadVideoPreview(item, requestId) {
+  setActivePreviewItem(item);
+  const media = document.createElement("video");
+  media.controls = true;
+  media.preload = "metadata";
+  media.src = previewMediaUrl(item);
+  media.addEventListener("webkitbeginfullscreen", () => { previewVideoFullscreen = true; });
+  media.addEventListener("webkitendfullscreen", () => { previewVideoFullscreen = false; });
+  media.addEventListener("error", () => {
+    if (requestId !== previewRequestId) return;
+    previewStatus("This video could not be played. It may use a format Safari does not support.");
+  }, { once: true });
+  $("previewContent").replaceChildren(media);
+
+  // Start both browser actions before yielding to the audit request or media network load.
+  enterVideoFullscreen(media);
+  try {
+    const playback = media.play();
+    if (playback?.catch) playback.catch(error => {
+      if (requestId !== previewRequestId || error?.name === "AbortError") return;
+      previewStatus("Playback did not start automatically. Tap Play in the video controls.");
+    });
+  } catch (_) {
+    previewStatus("Playback did not start automatically. Tap Play in the video controls.");
+  }
+  recordPreviewAudit(item, requestId);
+}
+
 async function openPreview(item, imageItems = []) {
   if (item.type === "image") {
     previewImageItems = imageItems.length ? imageItems : [item];
@@ -858,9 +942,15 @@ async function openPreview(item, imageItems = []) {
   lockPreviewBackground();
   modal.hidden = false;
   $("previewContent").replaceChildren();
+  previewVideoFullscreen = false;
   setActivePreviewItem(item);
   updatePreviewNavigation();
   updatePreviewFavoriteControl(item);
+  if (item.type === "video") {
+    const requestId = ++previewRequestId;
+    loadVideoPreview(item, requestId);
+    return;
+  }
   if (!document.fullscreenElement && document.fullscreenEnabled && typeof modal.requestFullscreen === "function") {
     try {
       const fullscreenRequest = modal.requestFullscreen({ navigationUI: "hide" });
@@ -895,6 +985,10 @@ function setActivePreviewItem(item) {
 async function loadPreviewItem(item) {
   const requestId = ++previewRequestId;
   try {
+    if (item.type === "video") {
+      loadVideoPreview(item, requestId);
+      return;
+    }
     const drive = item.drive || selectedDrive;
     const response = await fetch("/api/audit/preview", { method: "POST", headers: csrfHeaders(), body: JSON.stringify({ drive, path: item.path }) });
     if (response.status === 401) return loginRedirect();
@@ -903,8 +997,7 @@ async function loadPreviewItem(item) {
     if (requestId !== previewRequestId) return;
     setActivePreviewItem(item);
     const content = $("previewContent"); content.replaceChildren();
-    const media = document.createElement(item.type === "video" ? "video" : "img"); media.src = result.url;
-    if (item.type === "video") { media.controls = true; media.playsInline = true; } else media.alt = item.name;
+    const media = document.createElement("img"); media.src = result.url; media.alt = item.name;
     content.append(media);
   } catch (error) {
     if (requestId === previewRequestId) $("browseStatus").textContent = error.message || "Could not open preview.";
@@ -950,6 +1043,7 @@ $("closePreview").addEventListener("click", () => {
   previewImageItems = [];
   previewImageIndex = -1;
   previewItem = null;
+  previewVideoFullscreen = false;
   updatePreviewNavigation();
   const restorePage = () => {
     unlockPreviewBackground();
@@ -973,10 +1067,22 @@ $("previewModal").addEventListener("click", event => { if (event.target === $("p
 $("previewModal").addEventListener("keydown", event => {
   if (event.key === "ArrowLeft" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(-1); }
   if (event.key === "ArrowRight" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(1); }
-  if (event.key === "Escape") { event.preventDefault(); $("closePreview").click(); }
+  if (event.key === "Escape") {
+    const video = $("previewContent").querySelector("video");
+    if (video && (document.fullscreenElement === video || previewVideoFullscreen || video.webkitDisplayingFullscreen)) return;
+    event.preventDefault(); $("closePreview").click();
+  }
 });
 document.addEventListener("fullscreenchange", () => {
-  if (!$("previewModal").hidden && document.fullscreenElement !== $("previewModal")) $("closePreview").click();
+  const modal = $("previewModal");
+  if (modal.hidden) return;
+  const video = $("previewContent").querySelector("video");
+  if (video) {
+    previewVideoFullscreen = document.fullscreenElement === video || Boolean(video.webkitDisplayingFullscreen);
+    // Video fullscreen is a presentation change, not a request to close SBM's preview.
+    return;
+  }
+  if (document.fullscreenElement !== modal) $("closePreview").click();
 });
 let previewTouchStart = null;
 $("previewContent").addEventListener("touchstart", event => {
