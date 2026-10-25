@@ -3,17 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="light dark">
-  <title>Connect phone · SBM</title>
+  <meta name="color-scheme" content="light">
+  <title>Connect phone · SBM Arcade</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/sbm-logo.png') }}">
 </head>
-<body>
+<body class="arcade-page">
   <main class="connect-page">
     <header class="site-header">
-      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
-      <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div>
-      <p class="header-caption">Bring your phone<br>into the light.</p>
+      <img class="brand-mark" src="{{ url_for('static', filename='images/sbm-logo.png') }}" alt="" aria-hidden="true">
+      <div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Arcade</span></h1></div>
+      <p class="header-caption">Pair up and send<br>your media in motion.</p>
     </header>
+    <div class="signal-trail" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <section class="connect-sheet">
       <div class="connect-copy">
         <p class="eyebrow">PAIR A DEVICE</p>

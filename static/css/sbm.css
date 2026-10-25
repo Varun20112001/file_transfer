@@ -104,3 +104,50 @@ body.transfer-page .preview-nav{background:var(--sky);color:var(--ink);border-co
 body.transfer-page .preview-modal p{background:#201936E8;color:var(--paper);border:1px solid var(--lime)}
 body.transfer-page button:focus-visible,body.transfer-page input:focus-visible,body.transfer-page select:focus-visible{outline:3px solid var(--orange);outline-offset:3px}
 @media(max-width:560px){body.transfer-page .site-header{gap:9px}body.transfer-page .site-header .brand-mark{width:50px;height:50px}body.transfer-page .header-caption{font-size:10px;padding-left:8px}body.transfer-page .drop{min-height:95px;padding:16px 12px}body.transfer-page .drop b{font-size:15px}body.transfer-page .browser-card{box-shadow:4px 4px 0 var(--sky)}}
+
+/* Stage 2: carry the same arcade identity through connection and account pages. */
+body.arcade-page{--paper:#FFF3D5;--surface:#FFFAEA;--surface-2:#E9E0C3;--ink:#201936;--pine:#201936;--orange:#FF6B4A;--olive:#514769;--line:#C4BBA4;--track:#DAD1B8;--ok:#12634D;--bad:#A6342A;--warn:#80530D;--lime:#D9FF4F;--sky:#59D9FF;color-scheme:light;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--paper);color:var(--ink)}
+body.arcade-page h1,body.arcade-page h2,body.arcade-page button{font-family:"Trebuchet MS",system-ui,sans-serif}
+body.arcade-page h1{font-size:clamp(27px,4.5vw,38px);letter-spacing:-.055em;font-weight:900}
+body.arcade-page h1 span{color:var(--orange);font-weight:900}
+body.arcade-page .eyebrow{color:#514769;letter-spacing:.19em;font-size:10px}
+body.arcade-page .auth-brand,body.arcade-page .site-header{gap:13px;padding:11px 0 16px;border-bottom:2px dotted var(--ink);margin-bottom:7px}
+body.arcade-page .auth-brand .brand-mark,body.arcade-page .site-header .brand-mark{width:62px;height:62px;flex:none;object-fit:contain;background:transparent;border-radius:0;position:static}
+body.arcade-page .auth-brand h1{margin:0}
+body.arcade-page .header-caption{color:var(--ink);border-left:2px dotted var(--orange);font-weight:700}
+body.arcade-page .signal-trail{height:16px;width:164px;margin:0 0 16px 13px;border-bottom:3px dotted var(--sky);display:flex;align-items:flex-end;justify-content:space-between}
+body.arcade-page .signal-trail i{display:block;width:8px;height:8px;border-radius:50%;background:var(--orange);transform:translateY(5px)}
+body.arcade-page .signal-trail i:nth-child(2n){width:6px;height:6px;background:var(--lime);border:1px solid var(--ink)}
+body.arcade-page .signal-trail i:nth-child(4){width:12px;height:12px;background:var(--ink)}
+body.arcade-page .hint,body.arcade-page .auth-page .auth-intro{color:#514769}
+body.arcade-page .card,body.arcade-page .connect-sheet{background:var(--surface);border:2px solid var(--ink);border-radius:12px;padding:19px;box-shadow:5px 5px 0 var(--sky)}
+body.arcade-page .auth-form{gap:15px}
+body.arcade-page .auth-form label,body.arcade-page .audit-filters label{color:var(--ink);font-weight:750}
+body.arcade-page .auth-form input,body.arcade-page .audit-filters input,body.arcade-page .audit-filters select,body.arcade-page select{border:2px solid var(--ink);border-radius:8px;background:#fffdf6;color:var(--ink)}
+body.arcade-page .auth-form input:focus,body.arcade-page .audit-filters input:focus,body.arcade-page .audit-filters select:focus{border-color:#31526C}
+body.arcade-page button.primary{background:var(--lime);color:var(--ink);border:2px solid var(--ink);box-shadow:3px 3px 0 var(--orange)}
+body.arcade-page .primary:hover:not(:disabled){background:var(--sky);color:var(--ink)}
+body.arcade-page button.ghost{background:var(--surface);border:2px solid var(--ink);color:var(--ink)}
+body.arcade-page button.ghost:hover:not(:disabled){background:var(--sky);border-color:var(--ink);color:var(--ink)}
+body.arcade-page .flash{background:var(--ink);color:var(--paper);border-left-color:var(--orange);border-radius:0 9px 9px 0}
+body.arcade-page .flash.error{color:#FFE4D9}
+body.arcade-page .flash.success{color:var(--lime)}
+body.arcade-page .auth-backlink a,body.arcade-page .admin-nav a,body.arcade-page .pagination a{color:var(--ink);font-weight:800;text-decoration-color:var(--orange);text-decoration-thickness:2px}
+body.arcade-page .admin-nav{border-color:var(--ink)}
+body.arcade-page .admin-row{border-color:var(--line)}
+body.arcade-page .admin-row b{color:var(--ink)}
+body.arcade-page .audit-filters{grid-template-columns:1fr 1fr 1fr auto;gap:13px}
+body.arcade-page .audit-list{padding-top:7px}
+body.arcade-page .audit-row{border-color:var(--line);color:var(--ink)}
+body.arcade-page .audit-head{color:var(--ink);background:var(--lime);border-bottom:2px solid var(--ink);border-radius:5px;padding-top:8px;padding-bottom:8px}
+body.arcade-page .pagination span{color:#514769}
+body.arcade-page .connect-page{max-width:800px}
+body.arcade-page .connect-sheet{grid-template-columns:minmax(0,1fr) 260px;gap:24px;align-items:center}
+body.arcade-page .connect-copy p{color:#514769}
+body.arcade-page .connect-copy label{display:block;color:var(--ink);font-size:13px;font-weight:750;margin-bottom:6px}
+body.arcade-page .connect-copy select{width:100%;padding:10px}
+body.arcade-page .qr{border:2px solid var(--ink);border-radius:8px;box-shadow:4px 4px 0 var(--lime)}
+body.arcade-page .url{color:var(--ink);font-weight:750}
+body.arcade-page button:focus-visible,body.arcade-page input:focus-visible,body.arcade-page select:focus-visible,body.arcade-page a:focus-visible{outline:3px solid var(--orange);outline-offset:3px}
+@media(max-width:700px){body.arcade-page .audit-filters{grid-template-columns:1fr 1fr}body.arcade-page .audit-filters button{grid-column:1/-1}}
+@media(max-width:560px){body.arcade-page .auth-brand,body.arcade-page .site-header{gap:9px}body.arcade-page .auth-brand .brand-mark,body.arcade-page .site-header .brand-mark{width:50px;height:50px}body.arcade-page .header-caption{font-size:10px;padding-left:8px}body.arcade-page .card,body.arcade-page .connect-sheet{padding:15px;box-shadow:4px 4px 0 var(--sky)}body.arcade-page .connect-sheet{grid-template-columns:1fr;gap:12px}body.arcade-page .audit-filters{grid-template-columns:1fr}body.arcade-page .audit-filters button{grid-column:auto}body.arcade-page .qr{width:220px}body.arcade-page .qr-frame{text-align:left}}

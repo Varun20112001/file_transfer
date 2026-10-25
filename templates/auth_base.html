@@ -1,11 +1,12 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>{{ title }} · SBM</title><link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="light">
+<title>{{ title }} · SBM Arcade</title><link rel="stylesheet" href="{{ url_for('static', filename='css/sbm.css') }}"><link rel="icon" type="image/png" href="{{ url_for('static', filename='images/sbm-logo.png') }}">
 </head>
-<body><main class="auth-page">
-<header class="auth-brand"><div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Darkroom</span></h1></div></header>
+<body class="arcade-page"><main class="auth-page">
+<header class="auth-brand"><img class="brand-mark" src="{{ url_for('static', filename='images/sbm-logo.png') }}" alt="" aria-hidden="true"><div><p class="eyebrow">LOCAL MEDIA TRANSFER</p><h1>SBM <span>Arcade</span></h1></div></header>
+<div class="signal-trail" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 <p class="eyebrow">{{ title|upper }}</p>
 {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<p class="flash {{ category }}" role="status">{{ message }}</p>{% endfor %}{% endwith %}
 {% block body %}{% endblock %}
