@@ -503,6 +503,7 @@ const selectedDownloadItems = new Map();
 const browseCache = new Map();
 const browseScrollPositions = new Map();
 let browseRequestId = 0;
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
 function browseStateKey(drive, path) {
   const normalizedPath = String(path || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase();
@@ -541,7 +542,59 @@ function csrfHeaders() {
 }
 
 function loginRedirect() {
-  window.location.assign("/login?next=" + encodeURIComponent("/?mode=phone"));
+  const next = new URL(window.location.href);
+  next.searchParams.set("mode", "phone");
+  window.location.assign("/login?next=" + encodeURIComponent(next.pathname + next.search + next.hash));
+}
+
+function browseUrl(drive, path) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("mode", "phone");
+  if (drive) url.searchParams.set("drive", drive);
+  else url.searchParams.delete("drive");
+  if (path) url.searchParams.set("path", String(path).replaceAll("\\", "/"));
+  else url.searchParams.delete("path");
+  return url.pathname + url.search + url.hash;
+}
+
+function writeBrowseHistory(drive, path, replace = false) {
+  const state = { sbmBrowse: { drive, path: String(path || "").replaceAll("\\", "/") } };
+  const url = browseUrl(drive, path);
+  if (replace) history.replaceState(state, "", url);
+  else history.pushState(state, "", url);
+}
+
+function navigateBrowse(drive, path, options = {}) {
+  const targetPath = String(path || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+  const sameLocation = browseStateKey(drive, targetPath) === browseStateKey(selectedDrive, browsePath);
+  if (browseLoaded) {
+    browseScrollPositions.set(browseStateKey(selectedDrive, browsePath), window.scrollY);
+  }
+  if (options.clearDriveCache) clearBrowseDriveState(drive);
+  selectedDrive = drive;
+  $("drivePicker").value = drive;
+  if (!sameLocation) writeBrowseHistory(drive, targetPath);
+  return loadBrowse(targetPath, { rememberCurrent: false, resetScroll: options.resetScroll });
+}
+
+function restoreBrowseFromHistory() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("mode") !== "phone") {
+    showTransferMode("upload");
+    return;
+  }
+  showTransferMode("download");
+
+  const drives = [...$("drivePicker").options].map(option => option.value);
+  const requestedDrive = params.get("drive") || "";
+  const drive = drives.find(candidate => candidate.toLowerCase() === requestedDrive.toLowerCase()) || drives[0];
+  if (!drive) return;
+  const path = params.get("path") || "";
+  if (browseLoaded) browseScrollPositions.set(browseStateKey(selectedDrive, browsePath), window.scrollY);
+  selectedDrive = drive;
+  $("drivePicker").value = drive;
+  if (drive !== requestedDrive) writeBrowseHistory(drive, path, true);
+  loadBrowse(path, { rememberCurrent: false });
 }
 
 function updateDownloadSelection() {
@@ -780,13 +833,12 @@ async function deleteFile(item, row, button) {
 }
 
 function activateFavorite(item) {
-  selectedDrive = item.drive;
-  $("drivePicker").value = selectedDrive;
   if (item.type === "directory") {
     showLibraryView("browse");
-    browseLoaded = false;
-    loadBrowse(item.path);
+    navigateBrowse(item.drive, item.path);
   } else if (item.type === "image" || item.type === "video") {
+    selectedDrive = item.drive;
+    $("drivePicker").value = selectedDrive;
     openPreview(item, item.type === "image" ? favoriteImageItems : []);
   } else {
     saveOne(item);
@@ -853,7 +905,7 @@ async function setFavorite(item, button) {
 }
 
 function openBrowseItem(item) {
-  if (item.type === "directory") loadBrowse(item.path);
+  if (item.type === "directory") navigateBrowse(selectedDrive, item.path);
   else if (item.type === "image" || item.type === "video") openPreview(item, item.type === "image" ? browseImageItems : []);
   else saveOne(item);
 }
@@ -881,7 +933,13 @@ async function loadDrives() {
       const option = document.createElement("option"); option.value = drive.id; option.textContent = drive.label; picker.append(option);
     }
     if (!data.drives.length) throw new Error("No accessible fixed drives were found.");
-    selectedDrive = data.drives[0].id; picker.value = selectedDrive; await loadBrowse("");
+    const params = new URLSearchParams(window.location.search);
+    const requestedDrive = params.get("drive") || "";
+    selectedDrive = data.drives.find(drive => drive.id.toLowerCase() === requestedDrive.toLowerCase())?.id || data.drives[0].id;
+    picker.value = selectedDrive;
+    const requestedPath = params.get("path") || "";
+    writeBrowseHistory(selectedDrive, requestedPath, true);
+    await loadBrowse(requestedPath, { rememberCurrent: false });
   } catch (error) { $("browseStatus").textContent = error.message || "Could not find drives."; }
 }
 
@@ -1160,19 +1218,17 @@ document.querySelectorAll("[data-library-layout]").forEach(button => {
 });
 setLibraryLayout(libraryLayout, false);
 $("drivePicker").addEventListener("change", () => {
-  selectedDrive = $("drivePicker").value;
-  clearBrowseDriveState(selectedDrive);
-  browseLoaded = false;
+  navigateBrowse($("drivePicker").value, "", { clearDriveCache: true, resetScroll: true });
   selectedDownloadItems.clear();
-  loadBrowse("", { rememberCurrent: false, resetScroll: true });
 });
 $("refreshFiles").addEventListener("click", () => loadBrowse(browsePath, { force: true }));
-$("browseHome").addEventListener("click", () => loadBrowse(""));
+$("browseHome").addEventListener("click", () => navigateBrowse(selectedDrive, ""));
 $("browseUp").addEventListener("click", () => {
   const parts = browsePath.split("/").filter(Boolean);
   parts.pop();
-  loadBrowse(parts.join("/"));
+  navigateBrowse(selectedDrive, parts.join("/"));
 });
+window.addEventListener("popstate", restoreBrowseFromHistory);
 $("downloadSelected").addEventListener("click", async () => {
   const selected = [...selectedDownloadItems.values()];
   if (!selected.length) return;
