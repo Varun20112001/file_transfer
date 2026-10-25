@@ -5,6 +5,7 @@ let running = false, cancelled = false;
 const activeXhrs = new Set();
 let browseImageItems = [], favoriteImageItems = [];
 let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
+let previewBackgroundState = null;
 const libraryLayoutStorageKey = "sbm-library-layout";
 
 function readLibraryLayout() {
@@ -32,6 +33,58 @@ function setLibraryLayout(layout, persist = true) {
   if (persist) {
     try { localStorage.setItem(libraryLayoutStorageKey, layout); } catch (_) { /* storage may be disabled */ }
   }
+}
+
+function lockPreviewBackground() {
+  if (previewBackgroundState) return;
+  const body = document.body;
+  const root = document.documentElement;
+  const main = document.querySelector("main");
+  previewBackgroundState = {
+    scrollY: window.scrollY,
+    bodyPosition: body.style.position,
+    bodyTop: body.style.top,
+    bodyLeft: body.style.left,
+    bodyRight: body.style.right,
+    bodyWidth: body.style.width,
+    bodyOverflow: body.style.overflow,
+    rootOverflow: root.style.overflow,
+    main,
+    mainInert: main?.inert || false,
+    mainAriaHidden: main?.getAttribute("aria-hidden") ?? null,
+  };
+  root.style.overflow = "hidden";
+  body.style.position = "fixed";
+  body.style.top = `-${previewBackgroundState.scrollY}px`;
+  body.style.left = "0";
+  body.style.right = "0";
+  body.style.width = "100%";
+  body.style.overflow = "hidden";
+  if (main) {
+    main.inert = true;
+    main.setAttribute("aria-hidden", "true");
+  }
+}
+
+function unlockPreviewBackground() {
+  if (!previewBackgroundState) return;
+  const state = previewBackgroundState;
+  const body = document.body;
+  const root = document.documentElement;
+  body.style.position = state.bodyPosition;
+  body.style.top = state.bodyTop;
+  body.style.left = state.bodyLeft;
+  body.style.right = state.bodyRight;
+  body.style.width = state.bodyWidth;
+  body.style.overflow = state.bodyOverflow;
+  root.style.overflow = state.rootOverflow;
+  if (state.main) {
+    state.main.inert = state.mainInert;
+    if (state.mainAriaHidden === null) state.main.removeAttribute("aria-hidden");
+    else state.main.setAttribute("aria-hidden", state.mainAriaHidden);
+  }
+  previewBackgroundState = null;
+  window.scrollTo(0, state.scrollY);
 }
 
 function fmtSize(b) {
@@ -800,6 +853,7 @@ async function openPreview(item, imageItems = []) {
   }
   const modal = $("previewModal");
   previewReturnFocus = document.activeElement;
+  lockPreviewBackground();
   modal.hidden = false;
   $("previewContent").replaceChildren();
   setActivePreviewItem(item);
@@ -886,18 +940,32 @@ if ($("previewDelete")) {
   });
 }
 $("closePreview").addEventListener("click", () => {
+  const modal = $("previewModal");
+  const wasFullscreen = document.fullscreenElement === modal;
   previewRequestId++;
   $("previewContent").replaceChildren();
-  $("previewModal").hidden = true;
+  modal.hidden = true;
   previewImageItems = [];
   previewImageIndex = -1;
   previewItem = null;
   updatePreviewNavigation();
-  if (document.fullscreenElement === $("previewModal")) {
-    document.exitFullscreen?.().catch?.(() => {});
+  const restorePage = () => {
+    unlockPreviewBackground();
+    if (previewReturnFocus?.isConnected) previewReturnFocus.focus({ preventScroll: true });
+    previewReturnFocus = null;
+  };
+  if (wasFullscreen && typeof document.exitFullscreen === "function") {
+    try {
+      const exitRequest = document.exitFullscreen();
+      if (exitRequest?.then) {
+        exitRequest.then(restorePage, restorePage);
+        return;
+      }
+    } catch (_) {
+      // Restore page state even if the browser cannot leave fullscreen cleanly.
+    }
   }
-  if (previewReturnFocus?.isConnected) previewReturnFocus.focus({ preventScroll: true });
-  previewReturnFocus = null;
+  restorePage();
 });
 $("previewModal").addEventListener("click", event => { if (event.target === $("previewModal")) $("closePreview").click(); });
 $("previewModal").addEventListener("keydown", event => {

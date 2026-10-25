@@ -177,3 +177,6 @@ body.transfer-page .grid-mode .unavailable .browse-name{text-decoration:line-thr
 body.transfer-page .layout-button:focus-visible{outline:3px solid var(--orange);outline-offset:2px}
 @media(min-width:720px){body.transfer-page .browse-items.grid-mode{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:560px){body.transfer-page .library-tools{padding:8px 12px}body.transfer-page .browse-items.grid-mode{gap:8px;padding:9px}body.transfer-page .grid-mode .browse-row{min-height:188px;grid-template-rows:104px auto}body.transfer-page .grid-mode .browse-thumb,body.transfer-page .grid-mode .browse-kind,body.transfer-page .grid-mode .favorite-kind{height:104px}}
+
+/* Stage 4: keep touch overscroll inside the modal instead of chaining to the page. */
+body.transfer-page .preview-modal{overscroll-behavior:contain}
