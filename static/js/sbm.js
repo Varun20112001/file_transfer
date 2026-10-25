@@ -500,6 +500,41 @@ let browseLoaded = false;
 let selectedDrive = "";
 let libraryView = "browse";
 const selectedDownloadItems = new Map();
+const browseCache = new Map();
+const browseScrollPositions = new Map();
+let browseRequestId = 0;
+
+function browseStateKey(drive, path) {
+  const normalizedPath = String(path || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+  return drive.toUpperCase() + "/" + normalizedPath;
+}
+
+function clearBrowseDriveState(drive) {
+  const prefix = drive.toUpperCase() + "/";
+  for (const key of browseCache.keys()) {
+    if (key.startsWith(prefix)) browseCache.delete(key);
+  }
+  for (const key of browseScrollPositions.keys()) {
+    if (key.startsWith(prefix)) browseScrollPositions.delete(key);
+  }
+}
+
+function invalidateBrowseCacheForPath(drive, path) {
+  const normalizedPath = String(path || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+  const parentPath = normalizedPath.includes("/") ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/")) : "";
+  const parentKey = browseStateKey(drive, parentPath);
+  browseCache.delete(parentKey);
+  if (!normalizedPath) return;
+
+  const targetKey = browseStateKey(drive, normalizedPath);
+  const descendantPrefix = targetKey + "/";
+  for (const key of browseCache.keys()) {
+    if (key === targetKey || key.startsWith(descendantPrefix)) browseCache.delete(key);
+  }
+  for (const key of browseScrollPositions.keys()) {
+    if (key === targetKey || key.startsWith(descendantPrefix)) browseScrollPositions.delete(key);
+  }
+}
 
 function csrfHeaders() {
   return { "Content-Type": "application/json", "X-CSRFToken": document.querySelector('meta[name="csrf-token"]')?.content || "" };
@@ -518,14 +553,28 @@ function updateDownloadSelection() {
   $("downloadSelected").textContent = count ? "Save " + count + " item" + (count === 1 ? "" : "s") + " to phone" : "Save to phone";
 }
 
-async function loadBrowse(path = browsePath) {
+async function loadBrowse(path = browsePath, options = {}) {
+  const targetPath = String(path || "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+  const targetKey = browseStateKey(selectedDrive, targetPath);
+  const currentKey = browseStateKey(selectedDrive, browsePath);
+  if (options.rememberCurrent !== false && browseLoaded) {
+    browseScrollPositions.set(currentKey, window.scrollY);
+  }
+  if (options.resetScroll) browseScrollPositions.delete(targetKey);
+  const requestId = ++browseRequestId;
   $("browseStatus").textContent = "Loading files…";
   $("browseItems").replaceChildren();
   try {
-    const response = await fetch("/api/browse?" + new URLSearchParams({ drive: selectedDrive, path }));
-    if (response.status === 401) return loginRedirect();
-    if (!response.ok) throw new Error("Could not read this folder (" + response.status + ")");
-    const data = await response.json();
+    let data = options.force ? null : browseCache.get(targetKey);
+    if (!data) {
+      const response = await fetch("/api/browse?" + new URLSearchParams({ drive: selectedDrive, path: targetPath }));
+      if (response.status === 401) return loginRedirect();
+      if (!response.ok) throw new Error("Could not read this folder (" + response.status + ")");
+      data = await response.json();
+      if (requestId !== browseRequestId) return;
+      browseCache.set(targetKey, data);
+    }
+    if (requestId !== browseRequestId) return;
     browsePath = data.path || "";
     browseImageItems = (data.items || []).filter(item => item.type === "image").map(item => ({ ...item, drive: selectedDrive }));
     $("browsePath").textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
@@ -603,8 +652,14 @@ async function loadBrowse(path = browsePath) {
     $("browseStatus").textContent = "";
     browseLoaded = true;
     updateDownloadSelection();
+    const restoredScroll = options.resetScroll ? 0 : (browseScrollPositions.get(browseStateKey(selectedDrive, browsePath)) || 0);
+    requestAnimationFrame(() => {
+      if (requestId === browseRequestId && browseStateKey(selectedDrive, browsePath) === targetKey) {
+        window.scrollTo(0, restoredScroll);
+      }
+    });
   } catch (error) {
-    $("browseStatus").textContent = error.message || "Could not load files.";
+    if (requestId === browseRequestId) $("browseStatus").textContent = error.message || "Could not load files.";
   }
 }
 
@@ -703,6 +758,7 @@ async function deleteFile(item, row, button) {
     if (response.status === 401) return loginRedirect();
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Could not delete this ${item.type === "directory" ? "folder" : "file"}.`);
+    invalidateBrowseCacheForPath(drive, item.path);
     selectedDownloadItems.delete(item.path);
     updateDownloadSelection();
     if (row) row.remove();
@@ -1103,8 +1159,14 @@ document.querySelectorAll("[data-library-layout]").forEach(button => {
   button.addEventListener("click", () => setLibraryLayout(button.dataset.libraryLayout));
 });
 setLibraryLayout(libraryLayout, false);
-$("drivePicker").addEventListener("change", () => { selectedDrive = $("drivePicker").value; browseLoaded = false; selectedDownloadItems.clear(); loadBrowse(""); });
-$("refreshFiles").addEventListener("click", () => loadBrowse(browsePath));
+$("drivePicker").addEventListener("change", () => {
+  selectedDrive = $("drivePicker").value;
+  clearBrowseDriveState(selectedDrive);
+  browseLoaded = false;
+  selectedDownloadItems.clear();
+  loadBrowse("", { rememberCurrent: false, resetScroll: true });
+});
+$("refreshFiles").addEventListener("click", () => loadBrowse(browsePath, { force: true }));
 $("browseHome").addEventListener("click", () => loadBrowse(""));
 $("browseUp").addEventListener("click", () => {
   const parts = browsePath.split("/").filter(Boolean);
