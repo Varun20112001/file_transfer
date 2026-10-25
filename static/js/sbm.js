@@ -4,7 +4,7 @@ const jobs = [];
 let running = false, cancelled = false;
 const activeXhrs = new Set();
 let browseImageItems = [], favoriteImageItems = [];
-let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0;
+let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
 
 function fmtSize(b) {
   if (b < 1024) return b + " B";
@@ -601,6 +601,8 @@ async function deleteFile(item, row, button) {
   const drive = item.drive || selectedDrive;
   const fullPath = drive + "\\" + item.path.replaceAll("/", "\\");
   if (!window.confirm(`Permanently delete this file?\n\n${fullPath}\n\nThis cannot be undone.`)) return;
+  const deletingFromPreview = row === null;
+  const currentView = libraryView;
   button.disabled = true;
   try {
     const response = await fetch("/api/delete", {
@@ -613,14 +615,21 @@ async function deleteFile(item, row, button) {
     if (!response.ok) throw new Error(result.error || "Could not delete this file.");
     selectedDownloadItems.delete(item.path);
     updateDownloadSelection();
-    row.remove();
-    const status = libraryView === "favorites" ? $("favoritesStatus") : $("browseStatus");
-    status.textContent = `Deleted ${item.name}. Recorded under ${result.deleted_by}.`;
-    if (libraryView === "favorites") loadFavorites();
+    if (row) row.remove();
+    if (deletingFromPreview) $("closePreview").click();
+    const status = currentView === "favorites" ? $("favoritesStatus") : $("browseStatus");
+    const confirmation = `Deleted ${item.name}. Recorded under ${result.deleted_by}.`;
+    if (deletingFromPreview) {
+      if (currentView === "favorites") await loadFavorites();
+      else if (drive === selectedDrive) await loadBrowse(browsePath);
+    } else if (currentView === "favorites") {
+      await loadFavorites();
+    }
+    status.textContent = confirmation;
   } catch (error) {
-    const status = libraryView === "favorites" ? $("favoritesStatus") : $("browseStatus");
+    const status = currentView === "favorites" ? $("favoritesStatus") : $("browseStatus");
     status.textContent = error.message || "Could not delete this file.";
-    button.disabled = false;
+    if (button.isConnected) button.disabled = false;
   }
 }
 
@@ -665,6 +674,10 @@ function showLibraryView(view) {
 }
 
 function updateFavoriteButton(button, item) {
+  if (button.id === "previewFavorite") {
+    updatePreviewFavoriteControl(item);
+    return;
+  }
   button.textContent = item.favorite ? "★" : "☆";
   button.classList.toggle("is-favorite", Boolean(item.favorite));
   button.setAttribute("aria-pressed", String(Boolean(item.favorite)));
@@ -751,8 +764,42 @@ async function openPreview(item, imageItems = []) {
     previewImageItems = [];
     previewImageIndex = -1;
   }
+  const modal = $("previewModal");
+  previewReturnFocus = document.activeElement;
+  modal.hidden = false;
+  $("previewContent").replaceChildren();
+  setActivePreviewItem(item);
   updatePreviewNavigation();
+  updatePreviewFavoriteControl(item);
+  if (!document.fullscreenElement && document.fullscreenEnabled && typeof modal.requestFullscreen === "function") {
+    try {
+      const fullscreenRequest = modal.requestFullscreen({ navigationUI: "hide" });
+      if (fullscreenRequest?.catch) fullscreenRequest.catch(() => {});
+    } catch (_) {
+      // Keep the viewport-filling preview if native fullscreen is unavailable.
+    }
+  }
+  $("closePreview").focus({ preventScroll: true });
   await loadPreviewItem(item);
+}
+
+function updatePreviewFavoriteControl(item) {
+  const button = $("previewFavorite");
+  if (!button) return;
+  const favorite = Boolean(item?.favorite);
+  button.classList.toggle("is-favorite", favorite);
+  button.setAttribute("aria-pressed", String(favorite));
+  button.setAttribute("aria-label", favorite ? "Remove from favorites" : "Add to favorites");
+  button.title = favorite ? "Remove from favorites" : "Add to favorites";
+}
+
+function setActivePreviewItem(item) {
+  previewItem = item;
+  updatePreviewFavoriteControl(item);
+  $("previewName").textContent = item.type === "image" && previewImageItems.length > 1
+    ? `${item.name} · ${previewImageIndex + 1} of ${previewImageItems.length}` : item.name;
+  $("savePreview").onclick = () => saveOne(item);
+  if ($("previewDelete")) $("previewDelete").setAttribute("aria-label", "Delete " + item.name);
 }
 
 async function loadPreviewItem(item) {
@@ -764,14 +811,11 @@ async function loadPreviewItem(item) {
     if (!response.ok) throw new Error("Preview could not be opened (" + response.status + ")");
     const result = await response.json();
     if (requestId !== previewRequestId) return;
+    setActivePreviewItem(item);
     const content = $("previewContent"); content.replaceChildren();
     const media = document.createElement(item.type === "video" ? "video" : "img"); media.src = result.url;
     if (item.type === "video") { media.controls = true; media.playsInline = true; } else media.alt = item.name;
     content.append(media);
-    $("previewName").textContent = item.type === "image" && previewImageItems.length > 1
-      ? `${item.name} · ${previewImageIndex + 1} of ${previewImageItems.length}` : item.name;
-    $("savePreview").onclick = () => saveOne(item);
-    $("previewModal").hidden = false;
   } catch (error) {
     if (requestId === previewRequestId) $("browseStatus").textContent = error.message || "Could not open preview.";
   }
@@ -782,7 +826,9 @@ function movePreviewPhoto(direction) {
   if (nextIndex < 0 || nextIndex >= previewImageItems.length) return;
   previewImageIndex = nextIndex;
   updatePreviewNavigation();
-  loadPreviewItem(previewImageItems[previewImageIndex]);
+  const item = previewImageItems[previewImageIndex];
+  setActivePreviewItem(item);
+  loadPreviewItem(item);
 }
 
 async function saveOne(item) {
@@ -797,19 +843,36 @@ async function saveOne(item) {
 
 $("previousPhoto").addEventListener("click", () => movePreviewPhoto(-1));
 $("nextPhoto").addEventListener("click", () => movePreviewPhoto(1));
+$("previewFavorite").addEventListener("click", () => {
+  if (previewItem) setFavorite(previewItem, $("previewFavorite"));
+});
+if ($("previewDelete")) {
+  $("previewDelete").addEventListener("click", () => {
+    if (canDeleteFiles && previewItem) deleteFile(previewItem, null, $("previewDelete"));
+  });
+}
 $("closePreview").addEventListener("click", () => {
   previewRequestId++;
   $("previewContent").replaceChildren();
   $("previewModal").hidden = true;
   previewImageItems = [];
   previewImageIndex = -1;
+  previewItem = null;
   updatePreviewNavigation();
+  if (document.fullscreenElement === $("previewModal")) {
+    document.exitFullscreen?.().catch?.(() => {});
+  }
+  if (previewReturnFocus?.isConnected) previewReturnFocus.focus({ preventScroll: true });
+  previewReturnFocus = null;
 });
 $("previewModal").addEventListener("click", event => { if (event.target === $("previewModal")) $("closePreview").click(); });
 $("previewModal").addEventListener("keydown", event => {
   if (event.key === "ArrowLeft" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(-1); }
   if (event.key === "ArrowRight" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(1); }
   if (event.key === "Escape") { event.preventDefault(); $("closePreview").click(); }
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!$("previewModal").hidden && document.fullscreenElement !== $("previewModal")) $("closePreview").click();
 });
 let previewTouchStart = null;
 $("previewContent").addEventListener("touchstart", event => {
