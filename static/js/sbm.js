@@ -3,8 +3,8 @@ const canDeleteFiles = document.querySelector("main")?.dataset.canDelete === "tr
 const jobs = [];
 let running = false, cancelled = false;
 const activeXhrs = new Set();
-let browseImageItems = [], favoriteImageItems = [];
-let previewImageItems = [], previewImageIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
+let browseMediaItems = [], favoriteMediaItems = [];
+let previewMediaItems = [], previewMediaIndex = -1, previewRequestId = 0, previewItem = null, previewReturnFocus = null;
 let previewBackgroundState = null;
 let previewVideoFullscreen = false;
 const libraryLayoutStorageKey = "sbm-library-layout";
@@ -629,7 +629,9 @@ async function loadBrowse(path = browsePath, options = {}) {
     }
     if (requestId !== browseRequestId) return;
     browsePath = data.path || "";
-    browseImageItems = (data.items || []).filter(item => item.type === "image").map(item => ({ ...item, drive: selectedDrive }));
+    browseMediaItems = (data.items || [])
+      .filter(item => item.type === "image" || item.type === "video")
+      .map(item => ({ ...item, drive: selectedDrive }));
     $("browsePath").textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
     $("browseUp").disabled = !browsePath;
     selectedDownloadItems.clear();
@@ -717,7 +719,7 @@ async function loadBrowse(path = browsePath, options = {}) {
 }
 
 function renderFavoriteItems(items) {
-  favoriteImageItems = items.filter(item => item.available && item.type === "image");
+  favoriteMediaItems = items.filter(item => item.available && (item.type === "image" || item.type === "video"));
   const container = $("favoriteItems");
   container.replaceChildren();
   $("favoriteCount").textContent = items.length ? String(items.length) : "";
@@ -839,7 +841,7 @@ function activateFavorite(item) {
   } else if (item.type === "image" || item.type === "video") {
     selectedDrive = item.drive;
     $("drivePicker").value = selectedDrive;
-    openPreview(item, item.type === "image" ? favoriteImageItems : []);
+    openPreview(item, favoriteMediaItems);
   } else {
     saveOne(item);
   }
@@ -906,7 +908,7 @@ async function setFavorite(item, button) {
 
 function openBrowseItem(item) {
   if (item.type === "directory") navigateBrowse(selectedDrive, item.path);
-  else if (item.type === "image" || item.type === "video") openPreview(item, item.type === "image" ? browseImageItems : []);
+  else if (item.type === "image" || item.type === "video") openPreview(item, browseMediaItems);
   else saveOne(item);
 }
 
@@ -948,12 +950,12 @@ function previewKey(item) {
 }
 
 function updatePreviewNavigation() {
-  const hasPrevious = previewImageIndex > 0;
-  const hasNext = previewImageIndex >= 0 && previewImageIndex < previewImageItems.length - 1;
-  $("previousPhoto").hidden = previewImageItems.length < 2;
-  $("nextPhoto").hidden = previewImageItems.length < 2;
-  $("previousPhoto").disabled = !hasPrevious;
-  $("nextPhoto").disabled = !hasNext;
+  const hasPrevious = previewMediaIndex > 0;
+  const hasNext = previewMediaIndex >= 0 && previewMediaIndex < previewMediaItems.length - 1;
+  $("previousMedia").hidden = previewMediaItems.length < 2;
+  $("nextMedia").hidden = previewMediaItems.length < 2;
+  $("previousMedia").disabled = !hasPrevious;
+  $("nextMedia").disabled = !hasNext;
 }
 
 function previewMediaUrl(item) {
@@ -986,29 +988,15 @@ function recordPreviewAudit(item, requestId) {
   });
 }
 
-function enterVideoFullscreen(media) {
-  if (typeof media.webkitEnterFullscreen === "function") {
-    try {
-      // iPhone Safari requires this native call to happen in the opening tap's gesture.
-      previewVideoFullscreen = true;
-      media.webkitEnterFullscreen();
-      return;
-    } catch (_) {
-      previewVideoFullscreen = false;
-    }
+function clearPreviewMedia() {
+  const content = $("previewContent");
+  const video = content.querySelector("video");
+  if (video) {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
   }
-  if (typeof media.requestFullscreen === "function") {
-    try {
-      previewVideoFullscreen = true;
-      const request = media.requestFullscreen({ navigationUI: "hide" });
-      if (request?.catch) request.catch(() => {
-        previewVideoFullscreen = false;
-        previewStatus("Fullscreen is unavailable here. Use the video controls to play inline.");
-      });
-    } catch (_) {
-      previewVideoFullscreen = false;
-    }
-  }
+  content.replaceChildren();
 }
 
 function loadVideoPreview(item, requestId) {
@@ -1017,6 +1005,7 @@ function loadVideoPreview(item, requestId) {
   media.controls = true;
   media.preload = "metadata";
   media.src = previewMediaUrl(item);
+  // Leave playsinline unset: iPhone Safari opens its native player when Play is tapped.
   media.addEventListener("webkitbeginfullscreen", () => { previewVideoFullscreen = true; });
   media.addEventListener("webkitendfullscreen", () => { previewVideoFullscreen = false; });
   media.addEventListener("error", () => {
@@ -1024,47 +1013,25 @@ function loadVideoPreview(item, requestId) {
     previewStatus("This video could not be played. It may use a format Safari does not support.");
   }, { once: true });
   $("previewContent").replaceChildren(media);
-
-  // Start both browser actions before yielding to the audit request or media network load.
-  enterVideoFullscreen(media);
-  try {
-    const playback = media.play();
-    if (playback?.catch) playback.catch(error => {
-      if (requestId !== previewRequestId || error?.name === "AbortError") return;
-      previewStatus("Playback did not start automatically. Tap Play in the video controls.");
-    });
-  } catch (_) {
-    previewStatus("Playback did not start automatically. Tap Play in the video controls.");
-  }
   recordPreviewAudit(item, requestId);
 }
 
-async function openPreview(item, imageItems = []) {
-  if (item.type === "image") {
-    previewImageItems = imageItems.length ? imageItems : [item];
-    previewImageIndex = previewImageItems.findIndex(candidate => previewKey(candidate) === previewKey(item));
-    if (previewImageIndex < 0) {
-      previewImageItems = [item];
-      previewImageIndex = 0;
-    }
-  } else {
-    previewImageItems = [];
-    previewImageIndex = -1;
+async function openPreview(item, mediaItems = []) {
+  previewMediaItems = mediaItems.length ? mediaItems : [item];
+  previewMediaIndex = previewMediaItems.findIndex(candidate => previewKey(candidate) === previewKey(item));
+  if (previewMediaIndex < 0) {
+    previewMediaItems = [item];
+    previewMediaIndex = 0;
   }
   const modal = $("previewModal");
   previewReturnFocus = document.activeElement;
   lockPreviewBackground();
   modal.hidden = false;
-  $("previewContent").replaceChildren();
+  clearPreviewMedia();
   previewVideoFullscreen = false;
   setActivePreviewItem(item);
   updatePreviewNavigation();
   updatePreviewFavoriteControl(item);
-  if (item.type === "video") {
-    const requestId = ++previewRequestId;
-    loadVideoPreview(item, requestId);
-    return;
-  }
   if (!document.fullscreenElement && document.fullscreenEnabled && typeof modal.requestFullscreen === "function") {
     try {
       const fullscreenRequest = modal.requestFullscreen({ navigationUI: "hide" });
@@ -1090,14 +1057,15 @@ function updatePreviewFavoriteControl(item) {
 function setActivePreviewItem(item) {
   previewItem = item;
   updatePreviewFavoriteControl(item);
-  $("previewName").textContent = item.type === "image" && previewImageItems.length > 1
-    ? `${item.name} · ${previewImageIndex + 1} of ${previewImageItems.length}` : item.name;
+  $("previewName").textContent = previewMediaItems.length > 1
+    ? `${item.name} · ${previewMediaIndex + 1} of ${previewMediaItems.length}` : item.name;
   $("savePreview").onclick = () => saveOne(item);
   if ($("previewDelete")) $("previewDelete").setAttribute("aria-label", "Delete " + item.name);
 }
 
 async function loadPreviewItem(item) {
   const requestId = ++previewRequestId;
+  clearPreviewMedia();
   try {
     if (item.type === "video") {
       loadVideoPreview(item, requestId);
@@ -1110,7 +1078,7 @@ async function loadPreviewItem(item) {
     const result = await response.json();
     if (requestId !== previewRequestId) return;
     setActivePreviewItem(item);
-    const content = $("previewContent"); content.replaceChildren();
+    const content = $("previewContent");
     const media = document.createElement("img"); media.src = result.url; media.alt = item.name;
     content.append(media);
   } catch (error) {
@@ -1118,12 +1086,12 @@ async function loadPreviewItem(item) {
   }
 }
 
-function movePreviewPhoto(direction) {
-  const nextIndex = previewImageIndex + direction;
-  if (nextIndex < 0 || nextIndex >= previewImageItems.length) return;
-  previewImageIndex = nextIndex;
+function movePreviewMedia(direction) {
+  const nextIndex = previewMediaIndex + direction;
+  if (nextIndex < 0 || nextIndex >= previewMediaItems.length) return;
+  previewMediaIndex = nextIndex;
   updatePreviewNavigation();
-  const item = previewImageItems[previewImageIndex];
+  const item = previewMediaItems[previewMediaIndex];
   setActivePreviewItem(item);
   loadPreviewItem(item);
 }
@@ -1138,8 +1106,8 @@ async function saveOne(item) {
   } catch (error) { $("browseStatus").textContent = error.message || "Could not start the download."; }
 }
 
-$("previousPhoto").addEventListener("click", () => movePreviewPhoto(-1));
-$("nextPhoto").addEventListener("click", () => movePreviewPhoto(1));
+$("previousMedia").addEventListener("click", () => movePreviewMedia(-1));
+$("nextMedia").addEventListener("click", () => movePreviewMedia(1));
 $("previewFavorite").addEventListener("click", () => {
   if (previewItem) setFavorite(previewItem, $("previewFavorite"));
 });
@@ -1152,10 +1120,10 @@ $("closePreview").addEventListener("click", () => {
   const modal = $("previewModal");
   const wasFullscreen = document.fullscreenElement === modal;
   previewRequestId++;
-  $("previewContent").replaceChildren();
+  clearPreviewMedia();
   modal.hidden = true;
-  previewImageItems = [];
-  previewImageIndex = -1;
+  previewMediaItems = [];
+  previewMediaIndex = -1;
   previewItem = null;
   previewVideoFullscreen = false;
   updatePreviewNavigation();
@@ -1179,8 +1147,8 @@ $("closePreview").addEventListener("click", () => {
 });
 $("previewModal").addEventListener("click", event => { if (event.target === $("previewModal")) $("closePreview").click(); });
 $("previewModal").addEventListener("keydown", event => {
-  if (event.key === "ArrowLeft" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(-1); }
-  if (event.key === "ArrowRight" && previewImageItems.length > 1) { event.preventDefault(); movePreviewPhoto(1); }
+  if (event.key === "ArrowLeft" && previewMediaItems.length > 1) { event.preventDefault(); movePreviewMedia(-1); }
+  if (event.key === "ArrowRight" && previewMediaItems.length > 1) { event.preventDefault(); movePreviewMedia(1); }
   if (event.key === "Escape") {
     const video = $("previewContent").querySelector("video");
     if (video && (document.fullscreenElement === video || previewVideoFullscreen || video.webkitDisplayingFullscreen)) return;
@@ -1200,13 +1168,13 @@ document.addEventListener("fullscreenchange", () => {
 });
 let previewTouchStart = null;
 $("previewContent").addEventListener("touchstart", event => {
-  if (previewImageItems.length > 1 && event.touches.length === 1) previewTouchStart = event.touches[0].clientX;
+  if (previewMediaItems.length > 1 && event.touches.length === 1) previewTouchStart = event.touches[0].clientX;
 }, { passive: true });
 $("previewContent").addEventListener("touchend", event => {
   if (previewTouchStart === null || !event.changedTouches.length) return;
   const delta = event.changedTouches[0].clientX - previewTouchStart;
   previewTouchStart = null;
-  if (Math.abs(delta) >= 45) movePreviewPhoto(delta < 0 ? 1 : -1);
+  if (Math.abs(delta) >= 45) movePreviewMedia(delta < 0 ? 1 : -1);
 }, { passive: true });
 
 $("uploadTab").addEventListener("click", () => showTransferMode("upload"));

@@ -69,9 +69,9 @@
     <summary>Settings</summary>
     <div class="opts">
       <label for="conc">Parallel chunks</label>
-      <select id="conc"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>6</option></select>
+      <select id="conc"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>6</option></select>
       <label for="csize">Chunk size</label>
-      <select id="csize"><option value="2">2 MB</option><option value="5" selected>5 MB</option><option value="10">10 MB</option><option value="20">20 MB</option><option value="32">32 MB</option></select>
+      <select id="csize"><option value="2" selected>2 MB</option><option value="5">5 MB</option><option value="10">10 MB</option><option value="20">20 MB</option><option value="32">32 MB</option></select>
       <label class="chk"><input type="checkbox" id="extract" checked> Extract .zip files on the laptop</label>
       <label class="chk"><input type="checkbox" id="delzip" checked> Delete the .zip after extracting</label>
       <label class="chk"><input type="checkbox" id="force"> Re-send files that were already uploaded</label>
@@ -143,9 +143,9 @@
     </button>
     {% endif %}
   </div>
-  <button id="previousPhoto" class="preview-nav preview-previous" type="button" aria-label="Previous photo" title="Previous photo">‹</button>
+  <button id="previousMedia" class="preview-nav preview-previous" type="button" aria-label="Previous media item" title="Previous media item">‹</button>
   <div id="previewContent" class="preview-content"></div>
-  <button id="nextPhoto" class="preview-nav preview-next" type="button" aria-label="Next photo" title="Next photo">›</button>
+  <button id="nextMedia" class="preview-nav preview-next" type="button" aria-label="Next media item" title="Next media item">›</button>
   <p id="previewName"></p>
   <button id="savePreview" class="preview-action preview-download" type="button" aria-label="Save to phone" title="Save to phone">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 17v4h16v-4"/></svg>
