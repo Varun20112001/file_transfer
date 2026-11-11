@@ -17,7 +17,7 @@ from database import db, migrate, User, AuditEvent, Favorite, audit_buffer, star
 
 register_heif_opener()
 
-SAVE_DIR = os.getenv("SBM_SAVE_DIR", "D:\\Documents\\transfer")
+SAVE_DIR = os.getenv("SBM_SAVE_DIR", "D:\\Django\\transfer")
 TMP_DIR = os.path.join(SAVE_DIR, ".chunks")
 DONE_FILE = os.path.join(TMP_DIR, "done.json")
 OUTGOING_DIR = os.path.join(TMP_DIR, "outgoing")

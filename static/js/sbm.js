@@ -510,6 +510,11 @@ function browseStateKey(drive, path) {
   return drive.toUpperCase() + "/" + normalizedPath;
 }
 
+function scrollBrowsePathToEnd() {
+  const pathLabel = $("browsePath");
+  requestAnimationFrame(() => { pathLabel.scrollLeft = pathLabel.scrollWidth; });
+}
+
 function clearBrowseDriveState(drive) {
   const prefix = drive.toUpperCase() + "/";
   for (const key of browseCache.keys()) {
@@ -632,7 +637,10 @@ async function loadBrowse(path = browsePath, options = {}) {
     browseMediaItems = (data.items || [])
       .filter(item => item.type === "image" || item.type === "video")
       .map(item => ({ ...item, drive: selectedDrive }));
-    $("browsePath").textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
+    const pathLabel = $("browsePath");
+    pathLabel.textContent = selectedDrive + (browsePath ? "\\" + browsePath.replaceAll("/", "\\") : "\\");
+    pathLabel.title = pathLabel.textContent;
+    scrollBrowsePathToEnd();
     $("browseUp").disabled = !browsePath;
     selectedDownloadItems.clear();
 
@@ -1185,6 +1193,7 @@ document.querySelectorAll("[data-library-layout]").forEach(button => {
   button.addEventListener("click", () => setLibraryLayout(button.dataset.libraryLayout));
 });
 setLibraryLayout(libraryLayout, false);
+window.addEventListener("resize", scrollBrowsePathToEnd);
 $("drivePicker").addEventListener("change", () => {
   navigateBrowse($("drivePicker").value, "", { clearDriveCache: true, resetScroll: true });
   selectedDownloadItems.clear();
